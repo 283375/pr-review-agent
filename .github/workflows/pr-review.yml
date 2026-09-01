@@ -1,3 +1,7 @@
+# Self-test wiring: this action runs on its own repository so the trigger →
+# gate → review path can be exercised with real events. The gate job runs
+# first with a minimal token; the review job only runs for authorized
+# triggers and holds the publishing token.
 name: PR Review (self-test)
 
 on:
@@ -10,11 +14,45 @@ permissions:
 jobs:
   gate:
     runs-on: ubuntu-latest
+    outputs:
+      authorized: ${{ steps.gate.outputs.authorized }}
+      pr-number: ${{ steps.gate.outputs.pr-number }}
     steps:
-      - uses: ./
+      - id: gate
+        uses: ./
         with:
           allowed-actors: '__OWNER__'
           command: '/review'
           # __MEMBER__ is not used here yet; when it is, org repos need a
           # token with read:org plus `can-see-private-members: true`.
           github-token: ${{ secrets.GITHUB_TOKEN }}
+
+  review:
+    needs: gate
+    if: needs.gate.outputs.authorized == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # the agent inspects git history in the sandbox
+          ref: refs/pull/${{ needs.gate.outputs.pr-number }}/head
+
+      - id: review
+        uses: ./review
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          llm-provider: deepseek
+          llm-api-key: ${{ secrets.SV_PR_REVIEW_AGENT_API_KEY }}
+          llm-model: deepseek-v4-flash-vision-exp
+
+      - name: Upload review artifacts
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: pr-review-artifacts-${{ needs.gate.outputs.pr-number }}
+          path: ${{ steps.review.outputs.artifact-path }}
+          retention-days: 7
+          if-no-files-found: warn
