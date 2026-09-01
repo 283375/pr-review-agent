@@ -27802,7 +27802,7 @@ async function run(overrides = {}) {
     },
     env
   );
-  const actionRoot = overrides.env === void 0 ? import_node_path2.default.resolve(__dirname, "..") : env.PR_REVIEW_ACTION_ROOT ?? ".";
+  const actionRoot = overrides.env === void 0 ? import_node_path2.default.resolve(__dirname, "../..") : env.PR_REVIEW_ACTION_ROOT ?? ".";
   const workDir = import_node_path2.default.join(env.RUNNER_TEMP ?? env.PR_REVIEW_WORKDIR ?? ".", "pr-review-artifacts");
   const pipelineEnv = {};
   for (const [k, v] of Object.entries(env)) {

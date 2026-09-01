@@ -129,7 +129,9 @@ export async function run(overrides: {
     env,
   )
 
-  const actionRoot = overrides.env === undefined ? path.resolve(__dirname, '..') : env.PR_REVIEW_ACTION_ROOT ?? '.'
+  // The review bundle lives at review/dist/review.cjs — two levels below the
+  // repository root, where prompts/, pi/, gondolin/ and node_modules resolve.
+  const actionRoot = overrides.env === undefined ? path.resolve(__dirname, '../..') : env.PR_REVIEW_ACTION_ROOT ?? '.'
   const workDir = path.join(env.RUNNER_TEMP ?? env.PR_REVIEW_WORKDIR ?? '.', 'pr-review-artifacts')
 
   // The action directory may be a fresh runner-side fetch (remote `uses:`):
