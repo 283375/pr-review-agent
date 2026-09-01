@@ -27530,6 +27530,14 @@ function validateReviewOutput(raw, ctx) {
 }
 
 // src/review/pipeline.ts
+var NATIVE_PROVIDER_KEY_ENV = {
+  deepseek: "DEEPSEEK_API_KEY",
+  openai: "OPENAI_API_KEY",
+  anthropic: "ANTHROPIC_API_KEY",
+  google: "GEMINI_API_KEY",
+  xai: "XAI_API_KEY",
+  openrouter: "OPENROUTER_API_KEY"
+};
 function resolveLlmConfig(inputs, env) {
   const missing = [];
   const pick = (input, envName) => {
@@ -27537,37 +27545,57 @@ function resolveLlmConfig(inputs, env) {
     if (value === "") missing.push(envName);
     return value;
   };
+  const provider = inputs.llmProvider ?? env.SV_PR_REVIEW_AGENT_PROVIDER ?? "gateway";
   const apiKey = pick(inputs.llmApiKey, "SV_PR_REVIEW_AGENT_API_KEY");
-  const baseUrl = pick(inputs.llmBaseUrl, "SV_PR_REVIEW_AGENT_URL");
   const model = pick(inputs.llmModel, "SV_PR_REVIEW_AGENT_MODEL");
+  if (provider === "gateway") {
+    const baseUrl2 = pick(inputs.llmBaseUrl, "SV_PR_REVIEW_AGENT_URL");
+    if (missing.length > 0) {
+      throw new Error(
+        `Missing LLM configuration: ${missing.join(", ")}. Provide action inputs or repository/organization secrets; the action input wins.`
+      );
+    }
+    return { provider, apiKey, baseUrl: baseUrl2, model };
+  }
+  const baseUrl = inputs.llmBaseUrl ?? env.SV_PR_REVIEW_AGENT_URL;
   if (missing.length > 0) {
     throw new Error(
       `Missing LLM configuration: ${missing.join(", ")}. Provide action inputs or repository/organization secrets; the action input wins.`
     );
   }
-  return { apiKey, baseUrl, model };
+  return {
+    provider,
+    apiKey,
+    ...baseUrl ? { baseUrl } : {},
+    model
+  };
+}
+function nativeProviderKeyEnv(provider) {
+  return NATIVE_PROVIDER_KEY_ENV[provider] ?? `${provider.toUpperCase().replace(/-/g, "_")}_API_KEY`;
 }
 function writePiConfigDir(configDir, llm, write = (file, content) => {
   import_node_fs.default.mkdirSync(import_node_path.default.dirname(file), { recursive: true });
   import_node_fs.default.writeFileSync(file, content);
 }) {
-  write(
-    import_node_path.default.join(configDir, "models.json"),
-    JSON.stringify(
-      {
-        providers: {
-          gateway: {
-            baseUrl: llm.baseUrl,
-            api: "openai-completions",
-            apiKey: "$PR_REVIEW_LLM_KEY",
-            models: [{ id: llm.model }]
+  if (llm.provider === "gateway") {
+    write(
+      import_node_path.default.join(configDir, "models.json"),
+      JSON.stringify(
+        {
+          providers: {
+            gateway: {
+              baseUrl: llm.baseUrl,
+              api: "openai-completions",
+              apiKey: "$PR_REVIEW_LLM_KEY",
+              models: [{ id: llm.model }]
+            }
           }
-        }
-      },
-      null,
-      2
-    )
-  );
+        },
+        null,
+        2
+      )
+    );
+  }
   write(
     import_node_path.default.join(configDir, "settings.json"),
     JSON.stringify({ defaultProjectTrust: "never" }, null, 2)
@@ -27610,7 +27638,6 @@ async function runReviewPipeline(deps, params) {
   }
   Object.assign(piEnv, {
     PI_CODING_AGENT_DIR: configDir,
-    PR_REVIEW_LLM_KEY: params.llm.apiKey,
     PR_REVIEW_GITHUB_TOKEN: params.githubToken,
     PR_REVIEW_REPOSITORY: `${params.repository.owner}/${params.repository.name}`,
     PR_REVIEW_PR_NUMBER: String(params.prNumber),
@@ -27619,6 +27646,12 @@ async function runReviewPipeline(deps, params) {
     PR_REVIEW_STAGE_PATH: stagePath,
     PR_REVIEW_ALLOWED_HOSTS: ""
   });
+  if (params.llm.provider === "gateway") {
+    piEnv.PR_REVIEW_LLM_KEY = params.llm.apiKey;
+  } else {
+    piEnv[nativeProviderKeyEnv(params.llm.provider)] = params.llm.apiKey;
+  }
+  const modelArgs = params.llm.provider === "gateway" ? ["--provider", "gateway", "--model", params.llm.model] : ["--provider", params.llm.provider, "--model", params.llm.model];
   const piResult = await deps.spawn(
     deps.piCliPath,
     [
@@ -27634,10 +27667,7 @@ async function runReviewPipeline(deps, params) {
       "--no-extensions",
       "--exclude-tools",
       "edit,write,grep,find,ls,powershell",
-      "--provider",
-      "gateway",
-      "--model",
-      params.llm.model,
+      ...modelArgs,
       "--system-prompt",
       systemPrompt,
       initialPrompt
@@ -27710,6 +27740,7 @@ async function run(overrides = {}) {
     return;
   }
   const inputs = {
+    llmProvider: overrides.inputs?.["llm-provider"] ?? core.getInput("llm-provider"),
     llmApiKey: overrides.inputs?.["llm-api-key"] ?? core.getInput("llm-api-key"),
     llmBaseUrl: overrides.inputs?.["llm-base-url"] ?? core.getInput("llm-base-url"),
     llmModel: overrides.inputs?.["llm-model"] ?? core.getInput("llm-model"),
@@ -27717,7 +27748,12 @@ async function run(overrides = {}) {
     timeoutMinutes: Number(overrides.inputs?.["review-timeout-minutes"] ?? (core.getInput("review-timeout-minutes") || "15"))
   };
   const llm = resolveLlmConfig(
-    { llmApiKey: inputs.llmApiKey, llmBaseUrl: inputs.llmBaseUrl, llmModel: inputs.llmModel },
+    {
+      llmProvider: inputs.llmProvider,
+      llmApiKey: inputs.llmApiKey,
+      llmBaseUrl: inputs.llmBaseUrl,
+      llmModel: inputs.llmModel
+    },
     env
   );
   const actionRoot = overrides.env === void 0 ? import_node_path2.default.resolve(__dirname, "..") : env.PR_REVIEW_ACTION_ROOT ?? ".";
