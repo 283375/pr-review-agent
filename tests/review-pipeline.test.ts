@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import {
   nativeProviderKeyEnv,
   redactInFile,
+  renderPiEvent,
   resolveLlmConfig,
   runReviewPipeline,
   writePiConfigDir,
@@ -287,6 +288,9 @@ describe('runReviewPipeline', () => {
     expect(args).toContain('--no-context-files')
     expect(args).toContain('--no-approve')
     expect(args).toContain('--exclude-tools edit,write,grep,find,ls,powershell')
+    // --no-extensions only disables discovery; the review extension must be
+    // loaded explicitly or submit_review and the sandbox never exist.
+    expect(args).toContain('-e /ext.ts')
     expect(args).toContain('--provider gateway')
     expect(piCall.opts.env.PR_REVIEW_LLM_KEY).toBe('sk-secret')
     expect(piCall.opts.env.PI_CODING_AGENT_DIR).toMatch(/pi-config$/)
@@ -352,5 +356,51 @@ describe('redactInFile', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
+  })
+})
+
+describe('renderPiEvent', () => {
+  it('renders tool executions; failures get a marker', () => {
+    const start = renderPiEvent(
+      JSON.stringify({ type: 'tool_execution_start', toolName: 'bash', args: { command: 'git diff' } }),
+    )
+    expect(start).toContain('▶ bash')
+    expect(start).toContain('git diff')
+
+    const failed = renderPiEvent(
+      JSON.stringify({ type: 'tool_execution_end', toolName: 'bash', result: 'boom', isError: true }),
+    )
+    expect(failed).toContain('✗ bash')
+    expect(failed).toContain('boom')
+
+    const ok = renderPiEvent(
+      JSON.stringify({ type: 'tool_execution_end', toolName: 'bash', result: 'fine', isError: false }),
+    )
+    expect(ok).toBeUndefined()
+  })
+
+  it('previews plain assistant text but skips toolCall messages', () => {
+    const text = renderPiEvent(
+      JSON.stringify({ type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: 'hello world' }] } }),
+    )
+    expect(text).toContain('💬 hello world')
+
+    const toolCall = renderPiEvent(
+      JSON.stringify({ type: 'message_end', message: { role: 'assistant', content: [{ type: 'toolCall', id: 't1' }, { type: 'text', text: 'running…' }] } }),
+    )
+    expect(toolCall).toBeUndefined()
+  })
+
+  it('drops token-delta and lifecycle events; previews long text; passes non-JSON through', () => {
+    expect(renderPiEvent(JSON.stringify({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: 'x' } }))).toBeUndefined()
+    expect(renderPiEvent(JSON.stringify({ type: 'agent_end', messages: [] }))).toBeUndefined()
+    expect(renderPiEvent(JSON.stringify({ type: 'turn_start' }))).toBeUndefined()
+
+    const long = renderPiEvent(JSON.stringify({ type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: 'a'.repeat(500) }] } }))
+    expect(long).toMatch(/…$/)
+    expect(long!.length).toBeLessThan(260)
+
+    expect(renderPiEvent('Warning: something odd')).toContain('Warning')
+    expect(renderPiEvent('   ')).toBeUndefined()
   })
 })

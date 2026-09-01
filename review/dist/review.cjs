@@ -19718,11 +19718,11 @@ Support boolean input list: \`true | True | TRUE | false | False | FALSE\``);
       (0, command_1.issue)("echo", enabled ? "on" : "off");
     }
     exports2.setCommandEcho = setCommandEcho;
-    function setFailed2(message) {
+    function setFailed3(message) {
       process.exitCode = ExitCode.Failure;
       error(message);
     }
-    exports2.setFailed = setFailed2;
+    exports2.setFailed = setFailed3;
     function isDebug() {
       return process.env["RUNNER_DEBUG"] === "1";
     }
@@ -27614,6 +27614,36 @@ function latestSessionFile(sessionDir) {
   const files = import_node_fs.default.readdirSync(sessionDir).filter((f) => f.endsWith(".jsonl")).map((f) => import_node_path.default.join(sessionDir, f)).sort((a, b) => import_node_fs.default.statSync(b).mtimeMs - import_node_fs.default.statSync(a).mtimeMs);
   return files[0];
 }
+var EVENT_PREVIEW_CHARS = 200;
+function preview(value, chars = EVENT_PREVIEW_CHARS) {
+  const text = typeof value === "string" ? value : JSON.stringify(value) ?? "";
+  const single = text.replace(/\s+/g, " ").trim();
+  return single.length > chars ? `${single.slice(0, chars)}\u2026` : single;
+}
+function renderPiEvent(line) {
+  let event;
+  try {
+    event = JSON.parse(line);
+  } catch {
+    const text = line.trim();
+    return text === "" ? void 0 : preview(text);
+  }
+  switch (event.type) {
+    case "tool_execution_start":
+      return `\u25B6 ${event.toolName}: ${preview(event.args)}`;
+    case "tool_execution_end":
+      return event.isError ? `\u2717 ${event.toolName}: ${preview(event.result)}` : void 0;
+    case "message_end": {
+      const content = event.message?.content ?? [];
+      const hasToolCall = content.some((c) => c.type === "toolCall");
+      const text = content.find((c) => c.type === "text")?.text;
+      if (!hasToolCall && text) return `\u{1F4AC} ${preview(text)}`;
+      return void 0;
+    }
+    default:
+      return void 0;
+  }
+}
 async function runReviewPipeline(deps, params) {
   const { workDir, sessionDir, stagePath } = deps.paths;
   const secrets = [params.llm.apiKey, params.githubToken];
@@ -27653,6 +27683,25 @@ async function runReviewPipeline(deps, params) {
     piEnv[nativeProviderKeyEnv(params.llm.provider)] = params.llm.apiKey;
   }
   const modelArgs = params.llm.provider === "gateway" ? ["--provider", "gateway", "--model", params.llm.model] : ["--provider", params.llm.provider, "--model", params.llm.model];
+  deps.log?.(
+    `PR data collected (${meta.changedFiles.length} changed files); spawning pi session (timeout ${params.timeoutMinutes} min)...`
+  );
+  const eventTail = [];
+  const stats = { turns: 0, toolCalls: 0, compactions: 0 };
+  const piLog = (line) => {
+    try {
+      const type = JSON.parse(line).type;
+      if (type === "turn_start") stats.turns++;
+      else if (type === "tool_execution_start") stats.toolCalls++;
+      else if (type === "compaction_start") stats.compactions++;
+    } catch {
+    }
+    const rendered = renderPiEvent(line);
+    if (rendered === void 0) return;
+    deps.log?.(rendered);
+    eventTail.push(rendered);
+    if (eventTail.length > 10) eventTail.shift();
+  };
   const piResult = await deps.spawn(
     deps.piCliPath,
     [
@@ -27665,7 +27714,12 @@ async function runReviewPipeline(deps, params) {
       "--no-skills",
       "--no-prompt-templates",
       "--no-themes",
+      // Discovery is off; the review extension is loaded explicitly (-e).
+      // It provides the submit_review tool and the Gondolin sandbox — without
+      // it, bash/read run unsandboxed on the runner host.
       "--no-extensions",
+      "-e",
+      deps.extensionPath,
       "--exclude-tools",
       "edit,write,grep,find,ls,powershell",
       ...modelArgs,
@@ -27673,7 +27727,15 @@ async function runReviewPipeline(deps, params) {
       systemPrompt,
       initialPrompt
     ],
-    { env: piEnv, timeoutMs: params.timeoutMinutes * 6e4 }
+    { env: piEnv, timeoutMs: params.timeoutMinutes * 6e4, log: piLog }
+  );
+  const eventsPath = import_node_path.default.join(workDir, "pi-events.jsonl");
+  if (piResult.stdout !== "") {
+    import_node_fs.default.writeFileSync(eventsPath, piResult.stdout);
+    redactInFile(eventsPath, secrets);
+  }
+  deps.log?.(
+    `pi exited (code ${piResult.exitCode}${piResult.timedOut ? ", timed out" : ""}): ${stats.turns} turns, ${stats.toolCalls} tool calls${stats.compactions ? `, ${stats.compactions} compactions` : ""}`
   );
   const sessionFile = import_node_fs.default.existsSync(sessionDir) ? latestSessionFile(sessionDir) : void 0;
   if (sessionFile) {
@@ -27690,7 +27752,10 @@ async function runReviewPipeline(deps, params) {
     result.reason = piResult.exitCode === 0 ? "NO_OUTPUT" : "PI_FAILED";
     result.details = [
       `pi exit code: ${piResult.exitCode}${piResult.timedOut ? " (timed out)" : ""}`,
-      ...piResult.stderr ? [`stderr tail: ${piResult.stderr.slice(-2e3)}`] : []
+      ...eventTail.length > 0 ? [`last events:
+  ${eventTail.join("\n  ")}`] : [],
+      ...piResult.stderr ? [`stderr tail: ${piResult.stderr.slice(-2e3)}`] : [],
+      ...piResult.stdout ? [`stdout tail: ${piResult.stdout.slice(-3e3)}`] : []
     ];
     return result;
   }
@@ -27702,6 +27767,7 @@ async function runReviewPipeline(deps, params) {
     return result;
   }
   const review = validation.review;
+  deps.log?.(`Staged review validated (${review.findings.length} findings); publishing...`);
   const published = await deps.publisher.publishReview({
     owner: params.repository.owner,
     repo: params.repository.name,
@@ -27803,7 +27869,8 @@ async function run(overrides = {}) {
       piCliPath: import_node_path2.default.join(actionRoot, "node_modules", ".bin", "pi"),
       extensionPath: import_node_path2.default.join(actionRoot, "pi", "review-extension.ts"),
       systemPromptPath: import_node_path2.default.join(actionRoot, "prompts", "review-system.md"),
-      env: pipelineEnv
+      env: pipelineEnv,
+      log: actionLog
     },
     {
       repository,
@@ -27821,6 +27888,9 @@ async function run(overrides = {}) {
   core.setOutput("artifact-path", result.artifactPath);
   if (result.reviewUrl) core.setOutput("review-url", result.reviewUrl);
   for (const d of result.details ?? []) core.info(d);
+  if (!result.published) {
+    core.setFailed(`Review pipeline did not publish (${result.reason})`);
+  }
   core.summary.addRaw(
     `## PR Review pipeline
 
@@ -27839,11 +27909,26 @@ async function envSpawn(cmd, args, opts) {
     let stdout = "";
     let stderr = "";
     let timedOut = false;
-    child.stdout.on("data", (d) => {
-      stdout += String(d);
+    const pump = (stream, into) => {
+      let buf = "";
+      stream.setEncoding("utf8");
+      stream.on("data", (chunk) => {
+        buf += chunk;
+        let i;
+        while ((i = buf.indexOf("\n")) !== -1) {
+          const line = buf.slice(0, i);
+          buf = buf.slice(i + 1);
+          if (line.trim() !== "") into(line);
+        }
+      });
+    };
+    pump(child.stdout, (line) => {
+      stdout += line + "\n";
+      opts.log?.(line);
     });
-    child.stderr.on("data", (d) => {
-      stderr += String(d);
+    pump(child.stderr, (line) => {
+      stderr += line + "\n";
+      opts.log?.(`[stderr] ${line}`);
     });
     const timer = setTimeout(() => {
       timedOut = true;

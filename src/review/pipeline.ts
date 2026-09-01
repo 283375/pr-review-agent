@@ -104,7 +104,7 @@ export interface SpawnResult {
 export type SpawnFn = (
   cmd: string,
   args: string[],
-  opts: { env: Record<string, string>; timeoutMs: number },
+  opts: { env: Record<string, string>; timeoutMs: number; log?: (line: string) => void },
 ) => Promise<SpawnResult>
 
 export interface PipelineDeps {
@@ -118,6 +118,8 @@ export interface PipelineDeps {
   systemPromptPath: string
   env: Record<string, string | undefined>
   now?: () => string
+  /** Progress logging into the action log; optional for tests. */
+  log?: (message: string) => void
 }
 
 export interface PipelineParams {
@@ -191,6 +193,54 @@ function latestSessionFile(sessionDir: string): string | undefined {
   return files[0]
 }
 
+const EVENT_PREVIEW_CHARS = 200
+
+function preview(value: unknown, chars = EVENT_PREVIEW_CHARS): string {
+  const text = typeof value === 'string' ? value : JSON.stringify(value) ?? ''
+  const single = text.replace(/\s+/g, ' ').trim()
+  return single.length > chars ? `${single.slice(0, chars)}…` : single
+}
+
+/**
+ * Render one pi --mode json event line for the action log. The raw stream is
+ * token-level (message_update per delta) and carries full copies of tool
+ * output in later events — both unusable in a log, so only the events that
+ * show what the agent is DOING survive.
+ */
+export function renderPiEvent(line: string): string | undefined {
+  let event: {
+    type: string
+    toolName?: string
+    args?: unknown
+    result?: unknown
+    isError?: boolean
+    message?: { role?: string; content?: Array<{ type: string; text?: string }> }
+  }
+  try {
+    event = JSON.parse(line)
+  } catch {
+    // pi occasionally prints plain-text warnings on stdout; keep them visible.
+    const text = line.trim()
+    return text === '' ? undefined : preview(text)
+  }
+
+  switch (event.type) {
+    case 'tool_execution_start':
+      return `▶ ${event.toolName}: ${preview(event.args)}`
+    case 'tool_execution_end':
+      return event.isError ? `✗ ${event.toolName}: ${preview(event.result)}` : undefined
+    case 'message_end': {
+      const content = event.message?.content ?? []
+      const hasToolCall = content.some((c) => c.type === 'toolCall')
+      const text = content.find((c) => c.type === 'text')?.text
+      if (!hasToolCall && text) return `💬 ${preview(text)}`
+      return undefined
+    }
+    default:
+      return undefined
+  }
+}
+
 export async function runReviewPipeline(
   deps: PipelineDeps,
   params: PipelineParams,
@@ -245,6 +295,30 @@ export async function runReviewPipeline(
       ? ['--provider', 'gateway', '--model', params.llm.model]
       : ['--provider', params.llm.provider, '--model', params.llm.model]
 
+  deps.log?.(
+    `PR data collected (${meta.changedFiles.length} changed files); spawning pi session (timeout ${params.timeoutMinutes} min)...`,
+  )
+
+  // Compact view for the action log plus a tail for failure reports; the
+  // full event stream goes to the artifact below.
+  const eventTail: string[] = []
+  const stats = { turns: 0, toolCalls: 0, compactions: 0 }
+  const piLog = (line: string): void => {
+    try {
+      const type = (JSON.parse(line) as { type?: string }).type
+      if (type === 'turn_start') stats.turns++
+      else if (type === 'tool_execution_start') stats.toolCalls++
+      else if (type === 'compaction_start') stats.compactions++
+    } catch {
+      // non-JSON line: nothing to count
+    }
+    const rendered = renderPiEvent(line)
+    if (rendered === undefined) return
+    deps.log?.(rendered)
+    eventTail.push(rendered)
+    if (eventTail.length > 10) eventTail.shift()
+  }
+
   const piResult = await deps.spawn(
     deps.piCliPath,
     [
@@ -255,13 +329,30 @@ export async function runReviewPipeline(
       '--no-skills',
       '--no-prompt-templates',
       '--no-themes',
+      // Discovery is off; the review extension is loaded explicitly (-e).
+      // It provides the submit_review tool and the Gondolin sandbox — without
+      // it, bash/read run unsandboxed on the runner host.
       '--no-extensions',
+      '-e', deps.extensionPath,
       '--exclude-tools', 'edit,write,grep,find,ls,powershell',
       ...modelArgs,
       '--system-prompt', systemPrompt,
       initialPrompt,
     ],
-    { env: piEnv, timeoutMs: params.timeoutMinutes * 60_000 },
+    { env: piEnv, timeoutMs: params.timeoutMinutes * 60_000, log: piLog },
+  )
+
+  // Full-fidelity event stream for debugging (session jsonl lacks the
+  // message_update deltas); secrets are redacted like the session file.
+  const eventsPath = path.join(workDir, 'pi-events.jsonl')
+  if (piResult.stdout !== '') {
+    fs.writeFileSync(eventsPath, piResult.stdout)
+    redactInFile(eventsPath, secrets)
+  }
+  deps.log?.(
+    `pi exited (code ${piResult.exitCode}${piResult.timedOut ? ', timed out' : ''}): ` +
+      `${stats.turns} turns, ${stats.toolCalls} tool calls` +
+      `${stats.compactions ? `, ${stats.compactions} compactions` : ''}`, 
   )
 
   // Redact and export regardless of review outcome — artifacts are for
@@ -282,7 +373,9 @@ export async function runReviewPipeline(
     result.reason = piResult.exitCode === 0 ? 'NO_OUTPUT' : 'PI_FAILED'
     result.details = [
       `pi exit code: ${piResult.exitCode}${piResult.timedOut ? ' (timed out)' : ''}`,
+      ...(eventTail.length > 0 ? [`last events:\n  ${eventTail.join('\n  ')}`] : []),
       ...(piResult.stderr ? [`stderr tail: ${piResult.stderr.slice(-2000)}`] : []),
+      ...(piResult.stdout ? [`stdout tail: ${piResult.stdout.slice(-3000)}`] : []),
     ]
     return result
   }
@@ -298,6 +391,7 @@ export async function runReviewPipeline(
   }
   const review: ReviewOutput = validation.review
 
+  deps.log?.(`Staged review validated (${review.findings.length} findings); publishing...`)
   const published = await deps.publisher.publishReview({
     owner: params.repository.owner,
     repo: params.repository.name,

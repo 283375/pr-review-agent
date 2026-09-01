@@ -131,6 +131,7 @@ export async function run(overrides: {
       extensionPath: path.join(actionRoot, 'pi', 'review-extension.ts'),
       systemPromptPath: path.join(actionRoot, 'prompts', 'review-system.md'),
       env: pipelineEnv,
+      log: actionLog,
     },
     {
       repository,
@@ -149,6 +150,11 @@ export async function run(overrides: {
   core.setOutput('artifact-path', result.artifactPath)
   if (result.reviewUrl) core.setOutput('review-url', result.reviewUrl)
   for (const d of result.details ?? []) core.info(d)
+  if (!result.published) {
+    // Artifacts are already uploaded via the always() step; a silent green run
+    // would hide pipeline failures from the PR author and repo watchers.
+    core.setFailed(`Review pipeline did not publish (${result.reason})`)
+  }
   core.summary.addRaw(
     `## PR Review pipeline\n\n| field | value |\n| --- | --- |\n` +
       `| decision | ${result.reason} |\n| findings | ${result.findingsCount} |\n` +
@@ -159,7 +165,7 @@ export async function run(overrides: {
 async function envSpawn(
   cmd: string,
   args: string[],
-  opts: { env: Record<string, string>; timeoutMs: number },
+  opts: { env: Record<string, string>; timeoutMs: number; log?: (line: string) => void },
 ): Promise<{ exitCode: number | null; stdout: string; stderr: string; timedOut: boolean }> {
   const { spawn } = await import('node:child_process')
   return new Promise((resolve, reject) => {
@@ -167,8 +173,27 @@ async function envSpawn(
     let stdout = ''
     let stderr = ''
     let timedOut = false
-    child.stdout.on('data', (d) => { stdout += String(d) })
-    child.stderr.on('data', (d) => { stderr += String(d) })
+    const pump = (stream: NodeJS.ReadableStream, into: (line: string) => void): void => {
+      let buf = ''
+      stream.setEncoding('utf8')
+      stream.on('data', (chunk: string) => {
+        buf += chunk
+        let i: number
+        while ((i = buf.indexOf('\n')) !== -1) {
+          const line = buf.slice(0, i)
+          buf = buf.slice(i + 1)
+          if (line.trim() !== '') into(line)
+        }
+      })
+    }
+    pump(child.stdout, (line) => {
+      stdout += line + '\n'
+      opts.log?.(line)
+    })
+    pump(child.stderr, (line) => {
+      stderr += line + '\n'
+      opts.log?.(`[stderr] ${line}`)
+    })
     const timer = setTimeout(() => {
       timedOut = true
       child.kill('SIGKILL')
