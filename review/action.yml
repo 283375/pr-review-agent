@@ -1,0 +1,55 @@
+name: 'PR Review (pipeline)'
+description: >-
+  Runs the review pipeline for an already-authorized /review command:
+  collects PR metadata, assembles the task block, runs pi with the sandbox
+  extension, validates the staged review, and publishes it. Run this after
+  the gate action authorized the trigger, with a checkout of the PR head in
+  fetch-depth: 0.
+author: 283375
+
+inputs:
+  llm-api-key:
+    description: >-
+      LLM API key. Falls back to the SV_PR_REVIEW_AGENT_API_KEY environment
+      variable (GitHub resolves organization secrets before repository
+      secrets); this input wins when set.
+    required: false
+  llm-base-url:
+    description: >-
+      OpenAI-compatible LLM endpoint (e.g. the LiteLLM gateway). Falls back to
+      SV_PR_REVIEW_AGENT_URL. Required unless your setup relies on a native
+      provider.
+    required: false
+  llm-model:
+    description: 'Model id served by the endpoint. Falls back to SV_PR_REVIEW_AGENT_MODEL.'
+    required: false
+  github-token:
+    description: >-
+      Token with pull-requests: write (publishes the review) and contents:
+      read. Used for PR metadata, publishing, and the sandbox tools.
+    required: false
+    default: ${{ github.token }}
+  review-timeout-minutes:
+    description: 'Hard limit on the pi review session; the run is killed on expiry.'
+    required: false
+    default: '15'
+  command:
+    description: 'The trigger command; used to strip the prefix from the comment body.'
+    required: false
+    default: '/review'
+
+outputs:
+  review-published:
+    description: '"true" when a review was validated and published.'
+  reason:
+    description: 'PUBLISHED | NO_OUTPUT | INVALID_STAGE | PI_FAILED | NOT_A_REVIEW_REQUEST | COMMAND_MISMATCH'
+  findings-count:
+    description: 'Number of findings in the published review.'
+  review-url:
+    description: 'URL of the published review, when published.'
+  artifact-path:
+    description: 'Directory containing the session log, exported HTML, and staged review (upload with actions/upload-artifact; redacted).'
+
+runs:
+  using: 'node24'
+  main: 'dist/review.js'

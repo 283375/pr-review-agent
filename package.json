@@ -9,7 +9,7 @@
     "node": ">=24"
   },
   "scripts": {
-    "build": "esbuild src/main.ts --bundle --platform=node --format=cjs --target=node24 --outfile=dist/index.js",
+    "build": "esbuild src/main.ts --bundle --platform=node --format=cjs --target=node24 --outfile=dist/index.js && esbuild src/review/entry.ts --bundle --platform=node --format=cjs --target=node24 --outfile=dist/review.js",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "verify-dist": "pnpm build && git diff --exit-code -- dist"
