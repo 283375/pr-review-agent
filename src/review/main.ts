@@ -1,4 +1,5 @@
-import { readFileSync } from 'node:fs'
+import { readFileSync, existsSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
 import path from 'node:path'
 import * as core from '@actions/core'
 import { createGhGet } from './gh'
@@ -10,6 +11,67 @@ import {
 } from './pipeline'
 import { commandMatches } from '../inputs'
 import { extractUserMessage } from './prompt'
+
+const PNPM_VERSION = '11.24.0'
+
+const actionLog = (message: string): void => core.info(message)
+
+/**
+ * The remote action directory ships without node_modules (uncommitted by
+ * design). pi and gondolin are dependencies, so bootstrap them on the runner
+ * before anything else needs them.
+ */
+function ensureActionDeps(actionRoot: string): void {
+  const piCli = path.join(
+    actionRoot,
+    'node_modules',
+    '@earendil-works',
+    'pi-coding-agent',
+    'dist',
+    'bundle',
+    'cli.js',
+  )
+  if (existsSync(piCli)) return
+  actionLog('Installing action dependencies (pnpm install)...')
+  const res = spawnSync('pnpm', ['install', '--frozen-lockfile'], {
+    cwd: actionRoot,
+    encoding: 'utf8',
+  })
+  if (res.status !== 0 || !existsSync(piCli)) {
+    throw new Error(
+      `Dependency install failed: ${(res.stderr ?? res.stdout ?? '').slice(-2000)}`,
+    )
+  }
+}
+
+/**
+ * Ensure a guest image with git/rg/fd exists: use GONDOLIN_GUEST_DIR when the
+ * caller provides one, otherwise build the bundled image config into the
+ * artifact work directory (tools needed for the build are installed here).
+ */
+function ensureGuestImage(actionRoot: string, workDir: string, env: Record<string, string | undefined>): string {
+  if (env.GONDOLIN_GUEST_DIR) return env.GONDOLIN_GUEST_DIR
+  const guestDir = path.join(workDir, 'guest-assets')
+  if (existsSync(path.join(guestDir, 'manifest.json'))) return guestDir
+
+  if (process.platform === 'linux') {
+    actionLog('Installing guest image build tools (lz4, cpio, e2fsprogs)...')
+    spawnSync('sudo', ['apt-get', 'update'], { stdio: 'ignore' })
+    spawnSync('sudo', ['apt-get', 'install', '-y', 'lz4', 'cpio', 'e2fsprogs'], { stdio: 'ignore' })
+  }
+  actionLog('Building guest image (no GONDOLIN_GUEST_DIR provided)...')
+  const res = spawnSync(
+    'pnpm',
+    ['exec', 'gondolin', 'build', '--config', path.join(actionRoot, 'gondolin', 'image.json'), '--output', guestDir],
+    { cwd: actionRoot, encoding: 'utf8' },
+  )
+  if (res.status !== 0 || !existsSync(path.join(guestDir, 'manifest.json'))) {
+    throw new Error(
+      `Guest image build failed: ${(res.stderr ?? res.stdout ?? '').slice(-2000)}`,
+    )
+  }
+  return guestDir
+}
 
 interface CommentPayload {
   action?: string
@@ -70,6 +132,18 @@ export async function run(overrides: {
   const actionRoot = overrides.env === undefined ? path.resolve(__dirname, '..') : env.PR_REVIEW_ACTION_ROOT ?? '.'
   const workDir = path.join(env.RUNNER_TEMP ?? env.PR_REVIEW_WORKDIR ?? '.', 'pr-review-artifacts')
 
+  // The action directory may be a fresh runner-side fetch (remote `uses:`):
+  // pi/gondolin deps and the guest image are bootstrapped on demand. Test
+  // injections (overrides.env) skip the bootstrap entirely.
+  const pipelineEnv: Record<string, string> = {}
+  for (const [k, v] of Object.entries(env)) {
+    if (typeof v === 'string') pipelineEnv[k] = v
+  }
+  if (overrides.env === undefined) {
+    ensureActionDeps(actionRoot)
+    pipelineEnv.GONDOLIN_GUEST_DIR = ensureGuestImage(actionRoot, workDir, env)
+  }
+
   const result = await runReviewPipeline(
     {
       get: createGhGet({ token: inputs.githubToken }),
@@ -83,7 +157,7 @@ export async function run(overrides: {
       piCliPath: path.join(actionRoot, 'node_modules', '@earendil-works', 'pi-coding-agent', 'dist', 'bundle', 'cli.js'),
       extensionPath: path.join(actionRoot, 'pi', 'review-extension.ts'),
       systemPromptPath: path.join(actionRoot, 'prompts', 'review-system.md'),
-      env,
+      env: pipelineEnv,
     },
     {
       repository,

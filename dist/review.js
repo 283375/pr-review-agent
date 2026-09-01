@@ -27225,6 +27225,7 @@ var core2 = __toESM(require_core(), 1);
 
 // src/review/main.ts
 var import_node_fs2 = require("node:fs");
+var import_node_child_process = require("node:child_process");
 var import_node_path2 = __toESM(require("node:path"), 1);
 var core = __toESM(require_core(), 1);
 
@@ -27717,6 +27718,51 @@ async function runReviewPipeline(deps, params) {
 }
 
 // src/review/main.ts
+var actionLog = (message) => core.info(message);
+function ensureActionDeps(actionRoot) {
+  const piCli = import_node_path2.default.join(
+    actionRoot,
+    "node_modules",
+    "@earendil-works",
+    "pi-coding-agent",
+    "dist",
+    "bundle",
+    "cli.js"
+  );
+  if ((0, import_node_fs2.existsSync)(piCli)) return;
+  actionLog("Installing action dependencies (pnpm install)...");
+  const res = (0, import_node_child_process.spawnSync)("pnpm", ["install", "--frozen-lockfile"], {
+    cwd: actionRoot,
+    encoding: "utf8"
+  });
+  if (res.status !== 0 || !(0, import_node_fs2.existsSync)(piCli)) {
+    throw new Error(
+      `Dependency install failed: ${(res.stderr ?? res.stdout ?? "").slice(-2e3)}`
+    );
+  }
+}
+function ensureGuestImage(actionRoot, workDir, env) {
+  if (env.GONDOLIN_GUEST_DIR) return env.GONDOLIN_GUEST_DIR;
+  const guestDir = import_node_path2.default.join(workDir, "guest-assets");
+  if ((0, import_node_fs2.existsSync)(import_node_path2.default.join(guestDir, "manifest.json"))) return guestDir;
+  if (process.platform === "linux") {
+    actionLog("Installing guest image build tools (lz4, cpio, e2fsprogs)...");
+    (0, import_node_child_process.spawnSync)("sudo", ["apt-get", "update"], { stdio: "ignore" });
+    (0, import_node_child_process.spawnSync)("sudo", ["apt-get", "install", "-y", "lz4", "cpio", "e2fsprogs"], { stdio: "ignore" });
+  }
+  actionLog("Building guest image (no GONDOLIN_GUEST_DIR provided)...");
+  const res = (0, import_node_child_process.spawnSync)(
+    "pnpm",
+    ["exec", "gondolin", "build", "--config", import_node_path2.default.join(actionRoot, "gondolin", "image.json"), "--output", guestDir],
+    { cwd: actionRoot, encoding: "utf8" }
+  );
+  if (res.status !== 0 || !(0, import_node_fs2.existsSync)(import_node_path2.default.join(guestDir, "manifest.json"))) {
+    throw new Error(
+      `Guest image build failed: ${(res.stderr ?? res.stdout ?? "").slice(-2e3)}`
+    );
+  }
+  return guestDir;
+}
 async function run(overrides = {}) {
   const env = overrides.env ?? process.env;
   const payload = overrides.payload ?? JSON.parse((0, import_node_fs2.readFileSync)(env.GITHUB_EVENT_PATH ?? "", "utf8"));
@@ -27758,6 +27804,14 @@ async function run(overrides = {}) {
   );
   const actionRoot = overrides.env === void 0 ? import_node_path2.default.resolve(__dirname, "..") : env.PR_REVIEW_ACTION_ROOT ?? ".";
   const workDir = import_node_path2.default.join(env.RUNNER_TEMP ?? env.PR_REVIEW_WORKDIR ?? ".", "pr-review-artifacts");
+  const pipelineEnv = {};
+  for (const [k, v] of Object.entries(env)) {
+    if (typeof v === "string") pipelineEnv[k] = v;
+  }
+  if (overrides.env === void 0) {
+    ensureActionDeps(actionRoot);
+    pipelineEnv.GONDOLIN_GUEST_DIR = ensureGuestImage(actionRoot, workDir, env);
+  }
   const result = await runReviewPipeline(
     {
       get: createGhGet({ token: inputs.githubToken }),
@@ -27771,7 +27825,7 @@ async function run(overrides = {}) {
       piCliPath: import_node_path2.default.join(actionRoot, "node_modules", "@earendil-works", "pi-coding-agent", "dist", "bundle", "cli.js"),
       extensionPath: import_node_path2.default.join(actionRoot, "pi", "review-extension.ts"),
       systemPromptPath: import_node_path2.default.join(actionRoot, "prompts", "review-system.md"),
-      env
+      env: pipelineEnv
     },
     {
       repository,

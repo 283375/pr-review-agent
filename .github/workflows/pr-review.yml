@@ -1,7 +1,13 @@
 # Self-test wiring: this action runs on its own repository so the trigger →
-# gate → review path can be exercised with real events. The gate job runs
-# first with a minimal token; the review job only runs for authorized
-# triggers and holds the publishing token.
+# gate → review path can be exercised with real events.
+#
+# Security notes:
+# - The gate job checks out the DEFAULT branch before `uses: ./` (local
+#   actions require a checkout) — never the PR head.
+# - The review job pins `uses: owner/repo@main`: the pipeline code always
+#   comes from the default branch, never from the checked-out PR head.
+#   The PR head checkout exists only as the read-only workspace the agent
+#   reviews.
 name: PR Review (self-test)
 
 on:
@@ -18,6 +24,12 @@ jobs:
       authorized: ${{ steps.gate.outputs.authorized }}
       pr-number: ${{ steps.gate.outputs.pr-number }}
     steps:
+      # Local action (`uses: ./`) needs the repo present; the default branch
+      # is the safe ref for issue_comment triggers.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/heads/main
+
       - id: gate
         uses: ./
         with:
@@ -35,13 +47,15 @@ jobs:
       contents: read
       pull-requests: write
     steps:
+      # The reviewed workspace: PR head with full history (git log in the
+      # sandbox). NOTE: this deliberately does NOT feed `uses:` below.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0 # the agent inspects git history in the sandbox
+          fetch-depth: 0
           ref: refs/pull/${{ needs.gate.outputs.pr-number }}/head
 
       - id: review
-        uses: ./review
+        uses: 283375/pr-review-agent@main
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           llm-provider: deepseek
