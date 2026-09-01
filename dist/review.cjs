@@ -27822,7 +27822,7 @@ async function run(overrides = {}) {
         sessionDir: import_node_path2.default.join(workDir, "sessions"),
         stagePath: import_node_path2.default.join(workDir, "stage.json")
       },
-      piCliPath: import_node_path2.default.join(actionRoot, "node_modules", "@earendil-works", "pi-coding-agent", "dist", "bundle", "cli.js"),
+      piCliPath: import_node_path2.default.join(actionRoot, "node_modules", ".bin", "pi"),
       extensionPath: import_node_path2.default.join(actionRoot, "pi", "review-extension.ts"),
       systemPromptPath: import_node_path2.default.join(actionRoot, "prompts", "review-system.md"),
       env: pipelineEnv

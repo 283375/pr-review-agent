@@ -57,4 +57,4 @@ outputs:
 
 runs:
   using: 'node24'
-  main: 'dist/review.js'
+  main: 'dist/review.cjs'

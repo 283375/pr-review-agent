@@ -154,7 +154,7 @@ export async function run(overrides: {
         sessionDir: path.join(workDir, 'sessions'),
         stagePath: path.join(workDir, 'stage.json'),
       } satisfies PipelinePaths,
-      piCliPath: path.join(actionRoot, 'node_modules', '@earendil-works', 'pi-coding-agent', 'dist', 'bundle', 'cli.js'),
+      piCliPath: path.join(actionRoot, 'node_modules', '.bin', 'pi'),
       extensionPath: path.join(actionRoot, 'pi', 'review-extension.ts'),
       systemPromptPath: path.join(actionRoot, 'prompts', 'review-system.md'),
       env: pipelineEnv,
