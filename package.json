@@ -1,0 +1,26 @@
+{
+  "name": "pr-review-agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.24.0",
+  "description": "GitHub Action: user authorization + trigger gate for the AI PR review agent",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "build": "esbuild src/main.ts --bundle --platform=node --format=cjs --target=node24 --outfile=dist/index.js",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "verify-dist": "pnpm build && git diff --exit-code -- dist"
+  },
+  "dependencies": {
+    "@actions/core": "^1.11.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "esbuild": "^0.25.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.2.0"
+  }
+}

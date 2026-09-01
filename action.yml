@@ -1,0 +1,60 @@
+name: 'PR Review Agent'
+description: >-
+  Authorizes who may trigger the AI PR review, and gates the rest of the
+  review pipeline behind that decision. This is the entry point of the
+  PR-review-agent system: authorization happens first, in code, before any
+  expensive or privileged work.
+author: 283375
+
+inputs:
+  allowed-actors:
+    description: >-
+      Who may trigger a review. Comma/whitespace/semicolon separated list of
+      reserved placeholders (__OWNER__, __MEMBER__, __COLLABORATOR__,
+      __CONTRIBUTOR__) and/or numeric GitHub user IDs. Numeric IDs are the
+      canonical identity — logins are display-only and are never matched
+      against. Multi-line YAML strings work: any whitespace runs as
+      separators.
+    required: true
+  command:
+    description: >-
+      The comment command that triggers a review (matched case-insensitively
+      at the start of a PR comment body).
+    required: false
+    default: '/review'
+  github-token:
+    description: >-
+      Token used for the __MEMBER__ API check (org membership). The default
+      GITHUB_TOKEN cannot read private org membership (needs read:org); for
+      private members pass a PAT or App token with read:org, or accept that
+      private members fail closed as MEMBER_UNVERIFIED.
+    required: false
+    default: ${{ github.token }}
+  can-see-private-members:
+    description: >-
+      Set true when github-token carries read:org (PAT/App), so a 404 from the
+      membership check is treated as an authoritative "not a member" instead
+      of an ambiguous failure. GitHub does not expose token scopes to actions,
+      so this must be declared, never guessed.
+    required: false
+    default: 'false'
+
+outputs:
+  authorized:
+    description: '"true" or "false" — whether the review pipeline may run.'
+  decision:
+    description: 'authorized | denied | skipped'
+  reason:
+    description: 'Machine-readable reason code (see README).'
+  rule:
+    description: 'The allowed-actors token that matched, when authorized.'
+  actor-login:
+    description: 'Login of the triggering user (display only).'
+  actor-id:
+    description: 'Numeric ID of the triggering user (canonical identity).'
+  pr-number:
+    description: 'Pull request number the command was issued on, when applicable.'
+
+runs:
+  using: 'node24'
+  main: 'dist/index.js'

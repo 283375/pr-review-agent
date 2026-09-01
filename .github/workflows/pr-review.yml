@@ -1,0 +1,20 @@
+name: PR Review (self-test)
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: ./
+        with:
+          allowed-actors: '__OWNER__'
+          command: '/review'
+          # __MEMBER__ is not used here yet; when it is, org repos need a
+          # token with read:org plus `can-see-private-members: true`.
+          github-token: ${{ secrets.GITHUB_TOKEN }}
