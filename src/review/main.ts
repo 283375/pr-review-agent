@@ -15,29 +15,31 @@ import { extractUserMessage } from './prompt'
 const actionLog = (message: string): void => core.info(message)
 
 /**
- * Ensure a guest image with git/rg/fd exists: use GONDOLIN_GUEST_DIR when the
- * caller provides one, otherwise build the bundled image config into the
- * artifact work directory (tools needed for the build are installed here).
+ * Ensure a guest image with git/rg/fd exists: build the bundled image config
+ * on first use. GONDOLIN_GUEST_DIR picks the output location (set by the
+ * workflow to a cache-restored dir, or defaulting to the artifact work dir);
+ * a set-but-empty dir (cache miss) is built into.
  */
 function ensureGuestImage(actionRoot: string, workDir: string, env: Record<string, string | undefined>): string {
-  if (env.GONDOLIN_GUEST_DIR) return env.GONDOLIN_GUEST_DIR
-  const guestDir = path.join(workDir, 'guest-assets')
+  const guestDir = env.GONDOLIN_GUEST_DIR || path.join(workDir, 'guest-assets')
   if (existsSync(path.join(guestDir, 'manifest.json'))) return guestDir
 
   if (process.platform === 'linux') {
     actionLog('Installing guest image build tools (lz4, cpio, e2fsprogs)...')
-    spawnSync('sudo', ['apt-get', 'update'], { stdio: 'ignore' })
-    spawnSync('sudo', ['apt-get', 'install', '-y', 'lz4', 'cpio', 'e2fsprogs'], { stdio: 'ignore' })
+    spawnSync('sudo', ['apt-get', 'update'], { stdio: 'inherit' })
+    spawnSync('sudo', ['apt-get', 'install', '-y', 'lz4', 'cpio', 'e2fsprogs'], { stdio: 'inherit' })
   }
-  actionLog('Building guest image (no GONDOLIN_GUEST_DIR provided)...')
+  actionLog(`Building guest image into ${guestDir}...`)
   const res = spawnSync(
     'pnpm',
     ['exec', 'gondolin', 'build', '--config', path.join(actionRoot, 'gondolin', 'image.json'), '--output', guestDir],
-    { cwd: actionRoot, encoding: 'utf8' },
+    // Inherit so build progress is visible in the action log; a silent
+    // capture made a slow build indistinguishable from a hang.
+    { cwd: actionRoot, stdio: 'inherit', timeout: 10 * 60 * 1000 },
   )
   if (res.status !== 0 || !existsSync(path.join(guestDir, 'manifest.json'))) {
     throw new Error(
-      `Guest image build failed: ${(res.stderr ?? res.stdout ?? '').slice(-2000)}`,
+      `Guest image build failed (status=${res.status}, error=${res.error?.message ?? 'none'}) — see log above`,
     )
   }
   return guestDir

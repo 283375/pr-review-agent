@@ -27720,23 +27720,24 @@ async function runReviewPipeline(deps, params) {
 // src/review/main.ts
 var actionLog = (message) => core.info(message);
 function ensureGuestImage(actionRoot, workDir, env) {
-  if (env.GONDOLIN_GUEST_DIR) return env.GONDOLIN_GUEST_DIR;
-  const guestDir = import_node_path2.default.join(workDir, "guest-assets");
+  const guestDir = env.GONDOLIN_GUEST_DIR || import_node_path2.default.join(workDir, "guest-assets");
   if ((0, import_node_fs2.existsSync)(import_node_path2.default.join(guestDir, "manifest.json"))) return guestDir;
   if (process.platform === "linux") {
     actionLog("Installing guest image build tools (lz4, cpio, e2fsprogs)...");
-    (0, import_node_child_process.spawnSync)("sudo", ["apt-get", "update"], { stdio: "ignore" });
-    (0, import_node_child_process.spawnSync)("sudo", ["apt-get", "install", "-y", "lz4", "cpio", "e2fsprogs"], { stdio: "ignore" });
+    (0, import_node_child_process.spawnSync)("sudo", ["apt-get", "update"], { stdio: "inherit" });
+    (0, import_node_child_process.spawnSync)("sudo", ["apt-get", "install", "-y", "lz4", "cpio", "e2fsprogs"], { stdio: "inherit" });
   }
-  actionLog("Building guest image (no GONDOLIN_GUEST_DIR provided)...");
+  actionLog(`Building guest image into ${guestDir}...`);
   const res = (0, import_node_child_process.spawnSync)(
     "pnpm",
     ["exec", "gondolin", "build", "--config", import_node_path2.default.join(actionRoot, "gondolin", "image.json"), "--output", guestDir],
-    { cwd: actionRoot, encoding: "utf8" }
+    // Inherit so build progress is visible in the action log; a silent
+    // capture made a slow build indistinguishable from a hang.
+    { cwd: actionRoot, stdio: "inherit", timeout: 10 * 60 * 1e3 }
   );
   if (res.status !== 0 || !(0, import_node_fs2.existsSync)(import_node_path2.default.join(guestDir, "manifest.json"))) {
     throw new Error(
-      `Guest image build failed: ${(res.stderr ?? res.stdout ?? "").slice(-2e3)}`
+      `Guest image build failed (status=${res.status}, error=${res.error?.message ?? "none"}) \u2014 see log above`
     );
   }
   return guestDir;

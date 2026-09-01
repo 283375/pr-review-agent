@@ -43,6 +43,9 @@ jobs:
     needs: gate
     if: needs.gate.outputs.authorized == 'true'
     runs-on: ubuntu-latest
+    # 25 min: guest image build (~1 min on cache miss) + pi session timeout
+    # (review-timeout-minutes) + artifact upload, with headroom.
+    timeout-minutes: 25
     permissions:
       contents: read
       pull-requests: write
@@ -54,8 +57,19 @@ jobs:
           fetch-depth: 0
           ref: refs/pull/${{ needs.gate.outputs.pr-number }}/head
 
+      # Same cache the guest-image workflow populates; the review job reuses
+      # the prebuilt image instead of rebuilding per run.
+      - id: guest-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .guest-assets
+          key: guest-image-${{ hashFiles('gondolin/image.json') }}-${{ hashFiles('pnpm-lock.yaml') }}
+
       - id: review
         uses: 283375/pr-review-agent/review@main
+        env:
+          # Cache-restored location; the action builds into it on cache miss.
+          GONDOLIN_GUEST_DIR: ${{ github.workspace }}/.guest-assets
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           llm-provider: deepseek
