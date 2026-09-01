@@ -55,7 +55,7 @@ jobs:
           ref: refs/pull/${{ needs.gate.outputs.pr-number }}/head
 
       - id: review
-        uses: 283375/pr-review-agent@main
+        uses: 283375/pr-review-agent/review@main
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           llm-provider: deepseek
@@ -63,7 +63,7 @@ jobs:
           llm-model: deepseek-v4-flash-vision-exp
 
       - name: Upload review artifacts
-        if: always()
+        if: always() && steps.review.outputs.artifact-path != ''
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: pr-review-artifacts-${{ needs.gate.outputs.pr-number }}
