@@ -31,6 +31,15 @@ export function createReviewPublisher(options: PublisherOptions): ReviewPublishe
   const baseUrl = (options.baseUrl ?? process.env.GITHUB_API_URL ?? 'https://api.github.com').replace(/\/+$/, '')
   const fetchImpl = options.fetchImpl ?? fetch
   const timeoutMs = options.timeoutMs ?? 30_000
+  // Static headers are identical for every review this publisher emits; build
+  // them once instead of per request.
+  const baseHeaders: Record<string, string> = {
+    Accept: 'application/vnd.github+json',
+    'X-GitHub-Api-Version': '2022-11-28',
+    'User-Agent': 'pr-review-agent',
+    Authorization: `Bearer ${options.token}`,
+    'Content-Type': 'application/json',
+  }
 
   return {
     async publishReview({ owner, repo, prNumber, review }) {
@@ -44,13 +53,7 @@ export function createReviewPublisher(options: PublisherOptions): ReviewPublishe
 
       const res = await fetchImpl(`${baseUrl}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pulls/${prNumber}/reviews`, {
         method: 'POST',
-        headers: {
-          Accept: 'application/vnd.github+json',
-          'X-GitHub-Api-Version': '2022-11-28',
-          'User-Agent': 'pr-review-agent',
-          Authorization: `Bearer ${options.token}`,
-          'Content-Type': 'application/json',
-        },
+        headers: { ...baseHeaders },
         signal: AbortSignal.timeout(timeoutMs),
         body: JSON.stringify({
           event: 'COMMENT',
