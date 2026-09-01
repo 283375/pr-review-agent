@@ -15,7 +15,8 @@
     "verify-dist": "pnpm build && git diff --exit-code -- dist"
   },
   "dependencies": {
-    "@actions/core": "^1.11.1"
+    "@actions/core": "^1.11.1",
+    "ajv": "^8.20.0"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
