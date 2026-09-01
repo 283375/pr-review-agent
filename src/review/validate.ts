@@ -1,4 +1,4 @@
-import Ajv from 'ajv'
+import Ajv2020 from 'ajv/dist/2020'
 import {
   REVIEW_OUTPUT_SCHEMA,
   type BlockedCapability,
@@ -6,7 +6,7 @@ import {
   type ReviewOutput,
 } from './schema'
 
-const ajv = new Ajv({ allErrors: true })
+const ajv = new Ajv2020({ allErrors: true })
 const validateSchema = ajv.compile(REVIEW_OUTPUT_SCHEMA)
 
 export interface SemanticContext {
