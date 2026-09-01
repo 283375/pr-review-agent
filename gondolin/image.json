@@ -1,0 +1,22 @@
+{
+  "arch": "x86_64",
+  "distro": "alpine",
+  "alpine": {
+    "version": "3.23.0",
+    "kernelPackage": "linux-virt",
+    "kernelImage": "vmlinuz-virt",
+    "rootfsPackages": [
+      "linux-virt",
+      "rng-tools",
+      "bash",
+      "ca-certificates",
+      "git",
+      "ripgrep",
+      "fd"
+    ],
+    "initramfsPackages": []
+  },
+  "rootfs": {
+    "label": "pr-review-agent-guest"
+  }
+}

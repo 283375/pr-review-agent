@@ -1,0 +1,46 @@
+# Builds the custom guest image (Alpine + git/ripgrep/fd) used by the review
+# sandbox, and caches it. The review pipeline mounts this via GONDOLIN_GUEST_DIR.
+# Image builds need no KVM — only cpio/lz4/e2fsprogs for rootfs construction.
+name: Guest image
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'gondolin/image.json'
+      - '.github/workflows/guest-image.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+          cache: 'pnpm'
+
+      - name: Install image build tools
+        run: sudo apt-get update && sudo apt-get install -y cpio lz4 e2fsprogs
+
+      - run: pnpm install --frozen-lockfile
+
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        id: guest-cache
+        with:
+          path: .guest-assets
+          key: guest-image-${{ hashFiles('gondolin/image.json') }}-${{ hashFiles('pnpm-lock.yaml') }}
+
+      - name: Build guest image
+        if: steps.guest-cache.outputs.cache-hit != 'true'
+        run: pnpm exec gondolin build --config gondolin/image.json --output .guest-assets
+
+      - name: Verify boot assets exist
+        run: test -f .guest-assets/manifest.json && ls -la .guest-assets
