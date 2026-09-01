@@ -27719,28 +27719,6 @@ async function runReviewPipeline(deps, params) {
 
 // src/review/main.ts
 var actionLog = (message) => core.info(message);
-function ensureActionDeps(actionRoot) {
-  const piCli = import_node_path2.default.join(
-    actionRoot,
-    "node_modules",
-    "@earendil-works",
-    "pi-coding-agent",
-    "dist",
-    "bundle",
-    "cli.js"
-  );
-  if ((0, import_node_fs2.existsSync)(piCli)) return;
-  actionLog("Installing action dependencies (pnpm install)...");
-  const res = (0, import_node_child_process.spawnSync)("pnpm", ["install", "--frozen-lockfile"], {
-    cwd: actionRoot,
-    encoding: "utf8"
-  });
-  if (res.status !== 0 || !(0, import_node_fs2.existsSync)(piCli)) {
-    throw new Error(
-      `Dependency install failed: ${(res.stderr ?? res.stdout ?? "").slice(-2e3)}`
-    );
-  }
-}
 function ensureGuestImage(actionRoot, workDir, env) {
   if (env.GONDOLIN_GUEST_DIR) return env.GONDOLIN_GUEST_DIR;
   const guestDir = import_node_path2.default.join(workDir, "guest-assets");
@@ -27809,7 +27787,6 @@ async function run(overrides = {}) {
     if (typeof v === "string") pipelineEnv[k] = v;
   }
   if (overrides.env === void 0) {
-    ensureActionDeps(actionRoot);
     pipelineEnv.GONDOLIN_GUEST_DIR = ensureGuestImage(actionRoot, workDir, env);
   }
   const result = await runReviewPipeline(

@@ -1,60 +1,76 @@
-name: 'PR Review (pipeline)'
-description: >-
-  Runs the review pipeline for an already-authorized /review command:
-  collects PR metadata, assembles the task block, runs pi with the sandbox
-  extension, validates the staged review, and publishes it. Run this after
-  the gate action authorized the trigger, with a checkout of the PR head in
-  fetch-depth: 0.
-author: 283375
-
+# Composite (not `using: node24`): the pipeline spawns pi as a separate
+# process from node_modules — pi/gondolin cannot be bundled into a
+# self-contained JS file, so dependencies are installed declaratively here
+# (the pattern claude-code-action uses) instead of ad-hoc inside the JS entry.
+name: 'PR Review Agent (review)'
+description: >
+  Runs the AI review pipeline for one /review trigger. The pi/gondolin
+  runtime is installed on the runner; the reviewed PR is the checked-out
+  workspace. Host-side only — the agent itself runs in a Gondolin micro-VM.
 inputs:
+  github-token:
+    description: 'Token for PR comments and API reads'
+    required: true
   llm-provider:
-    description: >-
-      `gateway` (default; any OpenAI-compatible endpoint via llm-base-url) or
-      a native pi provider id (e.g. `deepseek`) whose built-in model registry
-      and compat settings apply. Falls back to SV_PR_REVIEW_AGENT_PROVIDER.
+    description: 'LLM provider: a gateway model id from models.json, or a native provider (e.g. deepseek)'
     required: false
   llm-api-key:
-    description: >-
-      LLM API key. Falls back to the SV_PR_REVIEW_AGENT_API_KEY environment
-      variable (GitHub resolves organization secrets before repository
-      secrets); this input wins when set.
+    description: 'LLM API key (or SV_PR_REVIEW_AGENT_API_KEY env)'
     required: false
   llm-base-url:
-    description: >-
-      OpenAI-compatible LLM endpoint (gateway mode only; native providers
-      carry their own baseUrl). Falls back to SV_PR_REVIEW_AGENT_URL.
+    description: 'LLM base URL (gateway mode only)'
     required: false
   llm-model:
-    description: 'Model id served by the endpoint. Falls back to SV_PR_REVIEW_AGENT_MODEL.'
+    description: 'LLM model id'
     required: false
-  github-token:
-    description: >-
-      Token with pull-requests: write (publishes the review) and contents:
-      read. Used for PR metadata, publishing, and the sandbox tools.
-    required: false
-    default: ${{ github.token }}
   review-timeout-minutes:
-    description: 'Hard limit on the pi review session; the run is killed on expiry.'
+    description: 'Hard timeout for the pi session'
     required: false
     default: '15'
   command:
-    description: 'The trigger command; used to strip the prefix from the comment body.'
+    description: 'Trigger command to match'
     required: false
     default: '/review'
-
 outputs:
   review-published:
-    description: '"true" when a review was validated and published.'
+    description: 'Whether the review was published'
+    value: ${{ steps.review.outputs.review-published }}
   reason:
-    description: 'PUBLISHED | NO_OUTPUT | INVALID_STAGE | PI_FAILED | NOT_A_REVIEW_REQUEST | COMMAND_MISMATCH'
+    description: 'Pipeline decision'
+    value: ${{ steps.review.outputs.reason }}
   findings-count:
-    description: 'Number of findings in the published review.'
-  review-url:
-    description: 'URL of the published review, when published.'
+    description: 'Number of findings in the review'
+    value: ${{ steps.review.outputs.findings-count }}
   artifact-path:
-    description: 'Directory containing the session log, exported HTML, and staged review (upload with actions/upload-artifact; redacted).'
-
+    description: 'Directory with session artifacts (redacted)'
+    value: ${{ steps.review.outputs.artifact-path }}
+  review-url:
+    description: 'URL of the published review comment'
+    value: ${{ steps.review.outputs.review-url }}
 runs:
-  using: 'node24'
-  main: 'dist/review.cjs'
+  using: composite
+  steps:
+    - uses: pnpm/action-setup@ff378ebe6b225b0680b81c1ad4498ae0d1d3a5e3 # v6.0.10
+      with:
+        version: 11.24.0
+    - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      with:
+        node-version: '24'
+    - name: Install action dependencies
+      shell: bash
+      # The action dir is review/ inside the fetched repo; the workspace root
+      # (prompts/, gondolin/image.json, pnpm-workspace.yaml) is one level up.
+      run: cd "$GITHUB_ACTION_PATH/.." && pnpm install --frozen-lockfile
+    - id: review
+      shell: bash
+      run: node "$GITHUB_ACTION_PATH/dist/review.cjs"
+      env:
+        # @actions/core reads INPUT_<NAME> — composite actions do not inject
+        # these automatically, so every input is mapped explicitly.
+        INPUT_GITHUB-TOKEN: ${{ inputs.github-token }}
+        INPUT_LLM-PROVIDER: ${{ inputs.llm-provider }}
+        INPUT_LLM-API-KEY: ${{ inputs.llm-api-key }}
+        INPUT_LLM-BASE-URL: ${{ inputs.llm-base-url }}
+        INPUT_LLM-MODEL: ${{ inputs.llm-model }}
+        INPUT_REVIEW-TIMEOUT-MINUTES: ${{ inputs.review-timeout-minutes }}
+        INPUT_COMMAND: ${{ inputs.command }}

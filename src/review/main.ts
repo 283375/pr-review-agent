@@ -12,37 +12,7 @@ import {
 import { commandMatches } from '../inputs'
 import { extractUserMessage } from './prompt'
 
-const PNPM_VERSION = '11.24.0'
-
 const actionLog = (message: string): void => core.info(message)
-
-/**
- * The remote action directory ships without node_modules (uncommitted by
- * design). pi and gondolin are dependencies, so bootstrap them on the runner
- * before anything else needs them.
- */
-function ensureActionDeps(actionRoot: string): void {
-  const piCli = path.join(
-    actionRoot,
-    'node_modules',
-    '@earendil-works',
-    'pi-coding-agent',
-    'dist',
-    'bundle',
-    'cli.js',
-  )
-  if (existsSync(piCli)) return
-  actionLog('Installing action dependencies (pnpm install)...')
-  const res = spawnSync('pnpm', ['install', '--frozen-lockfile'], {
-    cwd: actionRoot,
-    encoding: 'utf8',
-  })
-  if (res.status !== 0 || !existsSync(piCli)) {
-    throw new Error(
-      `Dependency install failed: ${(res.stderr ?? res.stdout ?? '').slice(-2000)}`,
-    )
-  }
-}
 
 /**
  * Ensure a guest image with git/rg/fd exists: use GONDOLIN_GUEST_DIR when the
@@ -134,15 +104,14 @@ export async function run(overrides: {
   const actionRoot = overrides.env === undefined ? path.resolve(__dirname, '../..') : env.PR_REVIEW_ACTION_ROOT ?? '.'
   const workDir = path.join(env.RUNNER_TEMP ?? env.PR_REVIEW_WORKDIR ?? '.', 'pr-review-artifacts')
 
-  // The action directory may be a fresh runner-side fetch (remote `uses:`):
-  // pi/gondolin deps and the guest image are bootstrapped on demand. Test
-  // injections (overrides.env) skip the bootstrap entirely.
+  // Dependency install happens declaratively in review/action.yml (composite
+  // steps); the guest image is the only runtime-side bootstrap left. Test
+  // injections (overrides.env) skip it entirely.
   const pipelineEnv: Record<string, string> = {}
   for (const [k, v] of Object.entries(env)) {
     if (typeof v === 'string') pipelineEnv[k] = v
   }
   if (overrides.env === undefined) {
-    ensureActionDeps(actionRoot)
     pipelineEnv.GONDOLIN_GUEST_DIR = ensureGuestImage(actionRoot, workDir, env)
   }
 
