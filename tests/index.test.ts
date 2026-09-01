@@ -90,10 +90,17 @@ describe('run', () => {
   it('fails loud on an unexpected error and rethrows', async () => {
     // valid policy so the config-error branch is passed; no payload source →
     // loadPayload throws → unexpected-error branch
-    await expect(run({ inputs: { allowedActors: '__OWNER__' } })).rejects.toThrow(
-      /GITHUB_EVENT_PATH is not set/,
-    )
-    expect(coreMocks.setFailed).toHaveBeenCalledWith(expect.stringMatching(/Unexpected error/))
+    // CI sets GITHUB_EVENT_PATH to the real event file — clear it explicitly
+    const prevPath = process.env.GITHUB_EVENT_PATH
+    delete process.env.GITHUB_EVENT_PATH
+    try {
+      await expect(run({ inputs: { allowedActors: '__OWNER__' } })).rejects.toThrow(
+        /GITHUB_EVENT_PATH is not set/,
+      )
+      expect(coreMocks.setFailed).toHaveBeenCalledWith(expect.stringMatching(/Unexpected error/))
+    } finally {
+      if (prevPath !== undefined) process.env.GITHUB_EVENT_PATH = prevPath
+    }
   })
 
   it('loads the payload from GITHUB_EVENT_PATH when no overrides are given', async () => {
