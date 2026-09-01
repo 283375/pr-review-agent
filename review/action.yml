@@ -8,6 +8,12 @@ description: >-
 author: 283375
 
 inputs:
+  llm-provider:
+    description: >-
+      `gateway` (default; any OpenAI-compatible endpoint via llm-base-url) or
+      a native pi provider id (e.g. `deepseek`) whose built-in model registry
+      and compat settings apply. Falls back to SV_PR_REVIEW_AGENT_PROVIDER.
+    required: false
   llm-api-key:
     description: >-
       LLM API key. Falls back to the SV_PR_REVIEW_AGENT_API_KEY environment
@@ -16,9 +22,8 @@ inputs:
     required: false
   llm-base-url:
     description: >-
-      OpenAI-compatible LLM endpoint (e.g. the LiteLLM gateway). Falls back to
-      SV_PR_REVIEW_AGENT_URL. Required unless your setup relies on a native
-      provider.
+      OpenAI-compatible LLM endpoint (gateway mode only; native providers
+      carry their own baseUrl). Falls back to SV_PR_REVIEW_AGENT_URL.
     required: false
   llm-model:
     description: 'Model id served by the endpoint. Falls back to SV_PR_REVIEW_AGENT_MODEL.'

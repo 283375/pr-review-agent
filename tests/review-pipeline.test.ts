@@ -3,6 +3,7 @@ import { mkdtempSync, existsSync, readFileSync, writeFileSync, rmSync } from 'no
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
+  nativeProviderKeyEnv,
   redactInFile,
   resolveLlmConfig,
   runReviewPipeline,
@@ -17,13 +18,15 @@ import type { ReviewOutput } from '../src/review/schema'
 
 describe('resolveLlmConfig', () => {
   const full = {
+    SV_PR_REVIEW_AGENT_PROVIDER: 'gateway',
     SV_PR_REVIEW_AGENT_API_KEY: 'sk-env',
     SV_PR_REVIEW_AGENT_URL: 'https://gw.example.com/v1',
     SV_PR_REVIEW_AGENT_MODEL: 'review-model',
   }
 
-  it('resolves from environment (org→repo fallback already applied by GitHub)', () => {
+  it('resolves gateway mode from environment (org→repo fallback already applied by GitHub)', () => {
     expect(resolveLlmConfig({}, full)).toEqual({
+      provider: 'gateway',
       apiKey: 'sk-env',
       baseUrl: 'https://gw.example.com/v1',
       model: 'review-model',
@@ -36,11 +39,54 @@ describe('resolveLlmConfig', () => {
         { llmApiKey: 'sk-input', llmBaseUrl: 'https://input.example.com', llmModel: 'm2' },
         full,
       ),
-    ).toEqual({ apiKey: 'sk-input', baseUrl: 'https://input.example.com', model: 'm2' })
+    ).toEqual({
+      provider: 'gateway',
+      apiKey: 'sk-input',
+      baseUrl: 'https://input.example.com',
+      model: 'm2',
+    })
   })
 
-  it('fails naming every missing variable', () => {
-    expect(() => resolveLlmConfig({}, {})).toThrow(/SV_PR_REVIEW_AGENT_API_KEY, SV_PR_REVIEW_AGENT_URL, SV_PR_REVIEW_AGENT_MODEL/)
+  it('gateway mode fails naming every missing variable', () => {
+    const err = (() => {
+      try {
+        resolveLlmConfig({}, {})
+        return ''
+      } catch (e) {
+        return e instanceof Error ? e.message : String(e)
+      }
+    })()
+    expect(err).toMatch(/Missing LLM configuration/)
+    for (const name of ['SV_PR_REVIEW_AGENT_API_KEY', 'SV_PR_REVIEW_AGENT_URL', 'SV_PR_REVIEW_AGENT_MODEL']) {
+      expect(err).toContain(name)
+    }
+  })
+
+  it('native provider mode needs no base URL', () => {
+    expect(
+      resolveLlmConfig({ llmProvider: 'deepseek', llmApiKey: 'sk', llmModel: 'deepseek-v4-flash' }, {}),
+    ).toEqual({ provider: 'deepseek', apiKey: 'sk', model: 'deepseek-v4-flash' })
+  })
+
+  it('native provider mode can come entirely from the environment', () => {
+    expect(
+      resolveLlmConfig({}, {
+        SV_PR_REVIEW_AGENT_PROVIDER: 'deepseek',
+        SV_PR_REVIEW_AGENT_API_KEY: 'sk',
+        SV_PR_REVIEW_AGENT_MODEL: 'deepseek-v4-flash',
+      }),
+    ).toEqual({ provider: 'deepseek', apiKey: 'sk', model: 'deepseek-v4-flash' })
+  })
+
+  it('native provider mode still requires key and model', () => {
+    expect(() => resolveLlmConfig({ llmProvider: 'deepseek' }, {})).toThrow(
+      /SV_PR_REVIEW_AGENT_API_KEY, SV_PR_REVIEW_AGENT_MODEL/,
+    )
+  })
+
+  it('maps native providers to their key environment variable', () => {
+    expect(nativeProviderKeyEnv('deepseek')).toBe('DEEPSEEK_API_KEY')
+    expect(nativeProviderKeyEnv('custom-provider')).toBe('CUSTOM_PROVIDER_API_KEY')
   })
 })
 
@@ -48,7 +94,7 @@ describe('writePiConfigDir', () => {
   it('writes an isolated gateway provider with fail-closed project trust', () => {
     const dir = mkdtempSync(join(tmpdir(), 'pra-cfg-'))
     try {
-      writePiConfigDir(dir, { apiKey: 'sk', baseUrl: 'https://gw/v1', model: 'm' })
+      writePiConfigDir(dir, { provider: 'gateway', apiKey: 'sk', baseUrl: 'https://gw/v1', model: 'm' })
       const models = JSON.parse(readFileSync(join(dir, 'models.json'), 'utf8'))
       expect(models.providers.gateway).toMatchObject({
         baseUrl: 'https://gw/v1',
@@ -56,6 +102,19 @@ describe('writePiConfigDir', () => {
         apiKey: '$PR_REVIEW_LLM_KEY',
         models: [{ id: 'm' }],
       })
+      expect(JSON.parse(readFileSync(join(dir, 'settings.json'), 'utf8'))).toEqual({
+        defaultProjectTrust: 'never',
+      })
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('native providers get only the trust settings, no models.json', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'pra-cfg-'))
+    try {
+      writePiConfigDir(dir, { provider: 'deepseek', apiKey: 'sk', model: 'm' })
+      expect(existsSync(join(dir, 'models.json'))).toBe(false)
       expect(JSON.parse(readFileSync(join(dir, 'settings.json'), 'utf8'))).toEqual({
         defaultProjectTrust: 'never',
       })
@@ -171,7 +230,7 @@ describe('runReviewPipeline', () => {
     prNumber: 7,
     trigger: { login: 'boss', id: 1 },
     userMessage: '',
-    llm: { apiKey: 'sk-secret', baseUrl: 'https://gw/v1', model: 'm' },
+    llm: { provider: 'gateway', apiKey: 'sk-secret', baseUrl: 'https://gw/v1', model: 'm' },
     githubToken: 'gh-token-secret',
     timeoutMinutes: 1,
   }
@@ -233,6 +292,24 @@ describe('runReviewPipeline', () => {
     expect(piCall.opts.env.PI_CODING_AGENT_DIR).toMatch(/pi-config$/)
     const cfgDir = piCall.opts.env.PI_CODING_AGENT_DIR as string
     expect(readFileSync(join(cfgDir, 'settings.json'), 'utf8')).toContain('never')
+  })
+
+  it('native provider mode: built-in registry, key via well-known env, no models.json', async () => {
+    const paths = tmpPaths()
+    const spawn = fakeSpawn(true)
+    const deps = makeDeps(paths, spawn)
+    const result = await runReviewPipeline(deps, {
+      ...params,
+      llm: { provider: 'deepseek', apiKey: 'sk-ds', model: 'deepseek-v4-flash-vision-exp' },
+    })
+
+    expect(result).toMatchObject({ published: true, reason: 'PUBLISHED' })
+    const piCall = spawn.calls[0] as { args: string[]; opts: { env: Record<string, string> } }
+    expect(piCall.args.join(' ')).toContain('--provider deepseek')
+    expect(piCall.opts.env.DEEPSEEK_API_KEY).toBe('sk-ds')
+    expect(piCall.opts.env.PR_REVIEW_LLM_KEY).toBeUndefined()
+    const cfgDir = piCall.opts.env.PI_CODING_AGENT_DIR as string
+    expect(existsSync(join(cfgDir, 'models.json'))).toBe(false)
   })
 
   it('reports NO_OUTPUT without publishing when nothing was staged', async () => {

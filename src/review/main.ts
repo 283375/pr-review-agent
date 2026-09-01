@@ -49,6 +49,7 @@ export async function run(overrides: {
   }
 
   const inputs = {
+    llmProvider: overrides.inputs?.['llm-provider'] ?? core.getInput('llm-provider'),
     llmApiKey: overrides.inputs?.['llm-api-key'] ?? core.getInput('llm-api-key'),
     llmBaseUrl: overrides.inputs?.['llm-base-url'] ?? core.getInput('llm-base-url'),
     llmModel: overrides.inputs?.['llm-model'] ?? core.getInput('llm-model'),
@@ -57,7 +58,12 @@ export async function run(overrides: {
   }
 
   const llm = resolveLlmConfig(
-    { llmApiKey: inputs.llmApiKey, llmBaseUrl: inputs.llmBaseUrl, llmModel: inputs.llmModel },
+    {
+      llmProvider: inputs.llmProvider,
+      llmApiKey: inputs.llmApiKey,
+      llmBaseUrl: inputs.llmBaseUrl,
+      llmModel: inputs.llmModel,
+    },
     env,
   )
 
