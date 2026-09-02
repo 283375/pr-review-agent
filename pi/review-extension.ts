@@ -46,7 +46,6 @@ import { createReviewPublisher } from "../src/review/publisher";
 import type { ReviewOutput } from "../src/review/schema";
 
 const GUEST_WORKSPACE = "/workspace";
-const BASH_ALLOWLIST = ["git", "rg", "fd", "grep", "cat", "head", "tail", "wc", "ls"];
 
 const env = (name: string): string | undefined => {
   const value = process.env[name];
@@ -406,34 +405,9 @@ function createVmReadOps(vm: VM, cwd: string): ReadOperations {
   };
 }
 
-/** Shell operators split + first-token allowlist. Naive by design: the VM is the boundary; this is a courtesy gate with counted denials. */
-export function inspectBashCommand(command: string): string | undefined {
-  const segments = command.split(/&&|\|\||;|\||\n|&/);
-  for (const segment of segments) {
-    let tokens = segment.trim().split(/\s+/).filter(Boolean);
-    if (tokens.length === 0) continue;
-    while (tokens.length > 0 && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[0] ?? "")) tokens = tokens.slice(1);
-    const first = (tokens[0] ?? "").split("/").pop() ?? "";
-    if (first === "" || first === "env" || first === "command" || first === "builtin") {
-      return `cannot verify the executed program in: ${segment.trim().slice(0, 120)}`;
-    }
-    if ((segment.match(/`|\$\(/g) ?? []).length > 0) {
-      return `command substitution is not allowed: ${segment.trim().slice(0, 120)}`;
-    }
-    if (!BASH_ALLOWLIST.includes(first)) {
-      return `'${first}' is not in the inspection allowlist (${BASH_ALLOWLIST.join(", ")})`;
-    }
-  }
-  return undefined;
-}
-
 function createVmBashOps(vm: VM, cwd: string): BashOperations {
   return {
     exec: async (command, cmdCwd, { onData, signal, timeout }) => {
-      const violation = inspectBashCommand(command);
-      if (violation !== undefined) {
-        return { exitCode: 126, stderr: denialMessage("bash", `Denied: ${violation}`) };
-      }
       const guestCwd = toGuestPath(cwd, cmdCwd);
 
       const ac = new AbortController();

@@ -8,8 +8,11 @@ You run with these tools and no others:
 
 - `read` — read files in the repository workspace. Supports offset and line
   limits; it is the primary way to read code.
-- `bash` — repository inspection only. Allowed: `git`, `rg`, `fd`, `grep`,
-  `cat`, `head`, `tail`, `wc`, `ls`. Everything else is denied by the host.
+- `bash` — repository inspection inside the sandbox. The guest is a minimal
+  Alpine environment: `git`, `rg`, `fd`, and busybox tools (`cat`, `grep`,
+  `ls`, `head`, `tail`, `wc`, `sed`, ...) are available; there is no node,
+  build toolchain, or network access. Commands cannot affect anything
+  outside the sandbox.
 - `get_pr_comments` — the PR's discussion thread (review comments, issue
   comments, reviews), each item attributed with author and association.
 - `get_checks` — the PR's check runs and workflow conclusions (names and
@@ -30,10 +33,6 @@ You run with these tools and no others:
   use `/workspace/...` or relative paths.
 - The sandbox has no local branch names. To diff the change, use the base
   SHA from the task block's PR_METADATA: `git diff <baseSha>..HEAD`.
-- A `bash` command may fail transiently with exit code 126 early in the
-  session (sandbox startup race). Retry the command once before concluding
-  that the capability is unavailable; repeated failures across different
-  commands are real — report them in `blockedCapabilities`.
 
 # Tool usage
 
