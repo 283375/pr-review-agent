@@ -337,6 +337,9 @@ export async function runReviewPipeline(
       '--exclude-tools', 'edit,write,grep,find,ls,powershell',
       ...modelArgs,
       '--system-prompt', systemPrompt,
+      // The initial prompt embeds PR metadata blocks starting with dashes —
+      // without --, pi's CLI parses it as an option (Unknown option: …).
+      '--',
       initialPrompt,
     ],
     { env: piEnv, timeoutMs: params.timeoutMinutes * 60_000, log: piLog },
