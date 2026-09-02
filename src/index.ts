@@ -93,6 +93,10 @@ function writeResult(decision: Decision, prNumber?: number): void {
   }
 }
 
+function escapeCell(value: string): string {
+  return value.replace(/\|/g, '\\|').replace(/\n/g, ' ')
+}
+
 /**
  * Action entrypoint. Authorization runs before anything else — no checkout,
  * no network beyond the membership probe, nothing expensive happens before
