@@ -58,9 +58,10 @@ runs:
         node-version: '24'
     - name: Install micro-VM runtime (QEMU)
       shell: bash
-      # Gondolin runs its micro-VMs through QEMU (arm system emulation +
-      # qemu-img for disk setup); hosted runners do not ship them.
-      run: sudo apt-get update && sudo apt-get install -y qemu-system-arm qemu-utils
+      # Gondolin runs its x86_64 micro-VMs through QEMU; qemu-img (in
+      # qemu-utils) handles the disk image. The README's qemu-system-arm
+      # row is for ARM hosts — the extension invokes qemu-system-x86_64.
+      run: sudo apt-get update && sudo apt-get install -y qemu-system-x86 qemu-utils
     - name: Install action dependencies
       shell: bash
       # The action dir is review/ inside the fetched repo; the workspace root
