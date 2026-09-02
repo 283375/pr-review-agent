@@ -27905,7 +27905,7 @@ async function run(overrides = {}) {
 async function envSpawn(cmd, args, opts) {
   const { spawn } = await import("node:child_process");
   return new Promise((resolve, reject) => {
-    const child = spawn(cmd, args, { env: opts.env, cwd: process.cwd() });
+    const child = spawn(cmd, args, { env: opts.env, cwd: process.cwd(), stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
     let timedOut = false;

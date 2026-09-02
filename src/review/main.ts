@@ -169,7 +169,10 @@ async function envSpawn(
 ): Promise<{ exitCode: number | null; stdout: string; stderr: string; timedOut: boolean }> {
   const { spawn } = await import('node:child_process')
   return new Promise((resolve, reject) => {
-    const child = spawn(cmd, args, { env: opts.env, cwd: process.cwd() })
+    // stdin must not be an open pipe: pi's print/json modes read piped stdin
+    // and wait for EOF, so a never-closed pipe blocks startup before the
+    // first event is emitted (observed as a silent infinite hang in CI).
+    const child = spawn(cmd, args, { env: opts.env, cwd: process.cwd(), stdio: ['ignore', 'pipe', 'pipe'] })
     let stdout = ''
     let stderr = ''
     let timedOut = false
