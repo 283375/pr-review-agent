@@ -134,7 +134,13 @@ export interface PipelineParams {
 
 export interface ReviewRunResult {
   published: boolean
-  reason: 'PUBLISHED' | 'NO_OUTPUT' | 'INVALID_STAGE' | 'PI_FAILED'
+  reason:
+    | 'PUBLISHED' // fallback: the host published the staged review after the session ended
+    | 'PUBLISHED_BY_AGENT' // the agent called publish_review during the session
+    | 'PUBLISH_FAILED' // GitHub rejected the publish; details carry the API error
+    | 'NO_OUTPUT'
+    | 'INVALID_STAGE'
+    | 'PI_FAILED'
   reviewUrl?: string
   findingsCount: number
   artifactPath: string
@@ -372,6 +378,23 @@ export async function runReviewPipeline(
     if (exportResult.exitCode === 0 && fs.existsSync(htmlPath)) redactInFile(htmlPath, secrets)
   }
 
+  // The agent may have published during the session (publish_review tool);
+  // the fallback below must not double-publish.
+  const publishedPath = path.join(workDir, 'published.json')
+  if (fs.existsSync(publishedPath)) {
+    deps.log?.('Review was published by the agent during the session.')
+    const marker = JSON.parse(fs.readFileSync(publishedPath, 'utf8')) as { id: number; htmlUrl?: string }
+    result.published = true
+    result.reason = 'PUBLISHED_BY_AGENT'
+    result.reviewUrl = marker.htmlUrl
+    try {
+      result.findingsCount = (JSON.parse(fs.readFileSync(stagePath, 'utf8')) as ReviewOutput).findings.length
+    } catch {
+      result.findingsCount = 0
+    }
+    return result
+  }
+
   if (!fs.existsSync(stagePath)) {
     result.reason = piResult.exitCode === 0 ? 'NO_OUTPUT' : 'PI_FAILED'
     result.details = [
@@ -395,18 +418,26 @@ export async function runReviewPipeline(
   const review: ReviewOutput = validation.review
 
   deps.log?.(`Staged review validated (${review.findings.length} findings); publishing...`)
-  const published = await deps.publisher.publishReview({
-    owner: params.repository.owner,
-    repo: params.repository.name,
-    prNumber: params.prNumber,
-    review,
-  })
-
-  return {
-    published: true,
-    reason: 'PUBLISHED',
-    reviewUrl: published.htmlUrl,
-    findingsCount: review.findings.length,
-    artifactPath: workDir,
+  // Fallback publish for sessions that staged but did not publish. Errors are
+  // captured, not thrown: the artifact outputs must survive a failed publish.
+  try {
+    const published = await deps.publisher.publishReview({
+      owner: params.repository.owner,
+      repo: params.repository.name,
+      prNumber: params.prNumber,
+      review,
+      commitId: meta.headSha,
+    })
+    return {
+      published: true,
+      reason: 'PUBLISHED',
+      reviewUrl: published.htmlUrl,
+      findingsCount: review.findings.length,
+      artifactPath: workDir,
+    }
+  } catch (err) {
+    result.reason = 'PUBLISH_FAILED'
+    result.details = [err instanceof Error ? err.message : String(err)]
+    return result
   }
 }

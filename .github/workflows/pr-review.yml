@@ -77,10 +77,13 @@ jobs:
           llm-model: deepseek-v4-flash-vision-exp
 
       - name: Upload review artifacts
-        if: always() && steps.review.outputs.artifact-path != ''
+        # Fixed path (deterministic: RUNNER_TEMP/pr-review-artifacts), not the
+        # output — a crash before the output is set must still upload partial
+        # artifacts for debugging.
+        if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: pr-review-artifacts-${{ needs.gate.outputs.pr-number }}
-          path: ${{ steps.review.outputs.artifact-path }}
+          path: ${{ runner.temp }}/pr-review-artifacts
           retention-days: 7
           if-no-files-found: warn

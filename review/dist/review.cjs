@@ -27313,7 +27313,7 @@ function createReviewPublisher(options) {
   const fetchImpl = options.fetchImpl ?? fetch;
   const timeoutMs = options.timeoutMs ?? 3e4;
   return {
-    async publishReview({ owner, repo, prNumber, review }) {
+    async publishReview({ owner, repo, prNumber, review, commitId }) {
       const comments = toReviewComments(review).map((c) => ({
         path: c.path,
         line: c.line,
@@ -27332,6 +27332,7 @@ function createReviewPublisher(options) {
         },
         signal: AbortSignal.timeout(timeoutMs),
         body: JSON.stringify({
+          ...commitId ? { commit_id: commitId } : {},
           event: "COMMENT",
           body: `${REVIEW_MARKER}
 ${review.summary}`,
@@ -27751,6 +27752,20 @@ async function runReviewPipeline(deps, params) {
     );
     if (exportResult.exitCode === 0 && import_node_fs.default.existsSync(htmlPath)) redactInFile(htmlPath, secrets);
   }
+  const publishedPath = import_node_path.default.join(workDir, "published.json");
+  if (import_node_fs.default.existsSync(publishedPath)) {
+    deps.log?.("Review was published by the agent during the session.");
+    const marker = JSON.parse(import_node_fs.default.readFileSync(publishedPath, "utf8"));
+    result.published = true;
+    result.reason = "PUBLISHED_BY_AGENT";
+    result.reviewUrl = marker.htmlUrl;
+    try {
+      result.findingsCount = JSON.parse(import_node_fs.default.readFileSync(stagePath, "utf8")).findings.length;
+    } catch {
+      result.findingsCount = 0;
+    }
+    return result;
+  }
   if (!import_node_fs.default.existsSync(stagePath)) {
     result.reason = piResult.exitCode === 0 ? "NO_OUTPUT" : "PI_FAILED";
     result.details = [
@@ -27771,19 +27786,26 @@ async function runReviewPipeline(deps, params) {
   }
   const review = validation.review;
   deps.log?.(`Staged review validated (${review.findings.length} findings); publishing...`);
-  const published = await deps.publisher.publishReview({
-    owner: params.repository.owner,
-    repo: params.repository.name,
-    prNumber: params.prNumber,
-    review
-  });
-  return {
-    published: true,
-    reason: "PUBLISHED",
-    reviewUrl: published.htmlUrl,
-    findingsCount: review.findings.length,
-    artifactPath: workDir
-  };
+  try {
+    const published = await deps.publisher.publishReview({
+      owner: params.repository.owner,
+      repo: params.repository.name,
+      prNumber: params.prNumber,
+      review,
+      commitId: meta.headSha
+    });
+    return {
+      published: true,
+      reason: "PUBLISHED",
+      reviewUrl: published.htmlUrl,
+      findingsCount: review.findings.length,
+      artifactPath: workDir
+    };
+  } catch (err) {
+    result.reason = "PUBLISH_FAILED";
+    result.details = [err instanceof Error ? err.message : String(err)];
+    return result;
+  }
 }
 
 // src/review/main.ts

@@ -8,8 +8,12 @@
  *   default: the guest needs no network at all in v0).
  * - `get_pr_comments` / `get_checks` / `get_issue_ref` are host-side,
  *   read-only GitHub API tools; their output is untrusted data by policy.
- * - `submit_review` stages the review host-side after full validation; the
- *   runner publishes the staged review after the session ends.
+ * - `submit_review` stages the review host-side after full validation.
+ * - `publish_review` triggers a host-side GitHub API call for the staged
+ *   review (re-validated first): at most one publish per session, and the
+ *   API error text is returned to the agent for correction. The host
+ *   publishes the staged review as a fallback when the session ends without
+ *   a publish. The model never holds the token or speaks to GitHub directly.
  *
  * Configuration comes from the environment (set by the pipeline runner):
  * - PR_REVIEW_GITHUB_TOKEN, PR_REVIEW_GITHUB_API_URL
@@ -38,6 +42,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 
 import { validateReviewOutput } from "../src/review/validate";
+import { createReviewPublisher } from "../src/review/publisher";
 import type { ReviewOutput } from "../src/review/schema";
 
 const GUEST_WORKSPACE = "/workspace";
@@ -226,7 +231,7 @@ async function fetchIssueRef(
 // ---------------------------------------------------------------------------
 // Tool: submit_review
 
-const submitReviewDescription = `Stage the complete review for publication. Performs schema and policy validation; on failure you receive precise errors and may correct and restage. The host publishes the last staged version when the session ends. Stage only after your analysis is complete; restaging replaces the staged version.`;
+const submitReviewDescription = `Stage the complete review. Performs schema and policy validation; on failure you receive precise errors and may correct and restage. Staging alone does not publish — after staging, call publish_review. Restaging replaces the staged version.`;
 
 const SubmitParams = Type.Object({
   summary: Type.String({ description: "Overall assessment in markdown, including coverage and limitations." }),
@@ -276,6 +281,95 @@ function stageReview(raw: unknown): { ok: true; counts: string } | { ok: false; 
     `${review.findings.length} finding(s)` +
     (review.blockedCapabilities ? `, ${review.blockedCapabilities.length} blocked capability report(s)` : "");
   return { ok: true, counts };
+}
+
+// ---------------------------------------------------------------------------
+// Tool: publish_review
+
+/** Publisher contract slice used by the publish handler (kept narrow for tests). */
+interface PublishClient {
+  publishReview(params: {
+    owner: string
+    repo: string
+    prNumber: number
+    review: ReviewOutput
+    commitId?: string
+  }): Promise<{ id: number; htmlUrl?: string }>
+}
+
+export interface PublishDeps {
+  stagePath: string | undefined
+  publishedPath: string | undefined
+  changedFiles: string[]
+  owner: string | undefined
+  repo: string | undefined
+  prNumber: number
+  commitId: string | undefined
+  publisher: PublishClient
+}
+
+/**
+ * The publish step: re-validates the staged review (the agent may have
+ * restaged since), calls GitHub once per session, and records the result in
+ * published.json — the marker the host's fallback publisher checks so a
+ * session that already published is never published twice. API errors are
+ * returned as data for the agent to fix and retry.
+ */
+export function createPublishHandler(deps: PublishDeps): () => Promise<{ text: string; isError: boolean }> {
+  let published: { id: number; htmlUrl?: string } | undefined;
+  return async () => {
+    if (published) {
+      return {
+        text: `Review already published: ${published.htmlUrl ?? `id ${published.id}`}. Nothing left to do — end your session.`,
+        isError: false,
+      };
+    }
+    if (!deps.stagePath || !deps.publishedPath) {
+      return { text: "publish_review is not configured (missing stage path).", isError: true };
+    }
+    if (!deps.owner || !deps.repo || !deps.prNumber) {
+      return { text: "publish_review is not configured (missing repository/PR metadata).", isError: true };
+    }
+    if (!fs.existsSync(deps.stagePath)) {
+      return { text: "Nothing staged yet — stage the review with submit_review first.", isError: true };
+    }
+    let raw: unknown;
+    try {
+      raw = JSON.parse(fs.readFileSync(deps.stagePath, "utf8"));
+    } catch (err) {
+      return { text: `Staged review is not readable JSON (${String(err)}). Restage with submit_review.`, isError: true };
+    }
+    const validation = validateReviewOutput(raw, { changedFiles: deps.changedFiles });
+    if (!validation.ok) {
+      return {
+        text: `Staged review failed validation. Fix and restage with submit_review, then publish again:\n- ${validation.errors.join("\n- ")}`,
+        isError: true,
+      };
+    }
+    try {
+      published = await deps.publisher.publishReview({
+        owner: deps.owner,
+        repo: deps.repo,
+        prNumber: deps.prNumber,
+        review: validation.review,
+        commitId: deps.commitId,
+      });
+      fs.writeFileSync(deps.publishedPath, JSON.stringify(published, null, 2));
+      return {
+        text: `Review published: ${published.htmlUrl ?? `id ${published.id}`}. Publishing is complete — no further review actions are needed.`,
+        isError: false,
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return {
+        text:
+          `GitHub rejected the review: ${message}\n` +
+          `Common cause: an anchor line (file/startLine) outside the diff hunks of this PR. ` +
+          `Adjust or drop the affected finding (or fold it into the summary), restage with submit_review, then call publish_review again.`,
+        isError: true,
+      };
+    }
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -416,7 +510,15 @@ export default function reviewExtension(pi: ExtensionAPI) {
   }
 
   pi.on("session_start", async () => {
-    await ensureVm();
+    const activeVm = await ensureVm();
+    // The workspace mount is owned by the runner UID, not the guest user;
+    // git refuses to operate on it without an explicit exception. Best
+    // effort: a failure here only costs the agent one git error later.
+    try {
+      await activeVm.exec(["/bin/sh", "-lc", "git config --system --add safe.directory /workspace"]);
+    } catch {
+      // session start must not fail over a config convenience
+    }
   });
 
   pi.on("session_shutdown", async () => {
@@ -516,7 +618,35 @@ export default function reviewExtension(pi: ExtensionAPI) {
           true,
         );
       }
-      return toolText(`Review staged (${result.counts}). The host publishes it when the session ends. You may restage to replace it.`);
+      return toolText(`Review staged (${result.counts}). Now call publish_review to submit it to GitHub.`);
+    },
+  });
+
+  const PUBLISHED_PATH = STAGE_PATH
+    ? path.join(path.dirname(STAGE_PATH), "published.json")
+    : undefined;
+  const publishHandler = createPublishHandler({
+    stagePath: STAGE_PATH,
+    publishedPath: PUBLISHED_PATH,
+    changedFiles: CHANGED_FILES,
+    owner: repoOwner,
+    repo: repoName,
+    prNumber,
+    commitId: headSha || undefined,
+    publisher: createReviewPublisher({ token: GITHUB_TOKEN, baseUrl: GITHUB_API_URL }),
+  });
+
+  pi.registerTool({
+    name: "publish_review",
+    label: "Publish review",
+    description:
+      "Publish the currently staged review to GitHub (one-shot per session). " +
+      "Takes no parameters. On a GitHub API rejection the error is returned — " +
+      "fix the review, restage with submit_review, and publish again.",
+    parameters: Type.Object({}),
+    async execute() {
+      const result = await publishHandler();
+      return toolText(result.text, result.isError);
     },
   });
 }

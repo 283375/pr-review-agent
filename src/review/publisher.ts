@@ -12,6 +12,8 @@ export interface ReviewPublisher {
     repo: string
     prNumber: number
     review: ReviewOutput
+    /** Head SHA the review is anchored to; keeps line anchors stable if the head moves. */
+    commitId?: string
   }): Promise<PublishedReview>
 }
 
@@ -33,7 +35,7 @@ export function createReviewPublisher(options: PublisherOptions): ReviewPublishe
   const timeoutMs = options.timeoutMs ?? 30_000
 
   return {
-    async publishReview({ owner, repo, prNumber, review }) {
+    async publishReview({ owner, repo, prNumber, review, commitId }) {
       const comments = toReviewComments(review).map((c) => ({
         path: c.path,
         line: c.line,
@@ -53,6 +55,7 @@ export function createReviewPublisher(options: PublisherOptions): ReviewPublishe
         },
         signal: AbortSignal.timeout(timeoutMs),
         body: JSON.stringify({
+          ...(commitId ? { commit_id: commitId } : {}),
           event: 'COMMENT',
           body: `${REVIEW_MARKER}\n${review.summary}`,
           comments,

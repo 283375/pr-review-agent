@@ -333,6 +333,41 @@ describe('runReviewPipeline', () => {
     expect(result.details?.some((d) => d.includes('boom'))).toBe(true)
   })
 
+  it('skips the fallback publish when the agent already published (published.json)', async () => {
+    const paths = tmpPaths()
+    // A session that published also left a staged review behind.
+    const spawn = fakeSpawn(true)
+    writeFileSync(
+      join(paths.workDir, 'published.json'),
+      JSON.stringify({ id: 42, htmlUrl: 'https://example.com/r/42' }),
+    )
+    const result = await runReviewPipeline(makeDeps(paths, spawn), params)
+
+    expect(result).toMatchObject({
+      published: true,
+      reason: 'PUBLISHED_BY_AGENT',
+      reviewUrl: 'https://example.com/r/42',
+      findingsCount: 1,
+    })
+    expect(published).toHaveLength(0)
+  })
+
+  it('captures a publish failure as PUBLISH_FAILED instead of throwing', async () => {
+    const paths = tmpPaths()
+    const spawn = fakeSpawn(true)
+    const deps = makeDeps(paths, spawn)
+    // Replace (not mutate) the shared publisher: other tests reuse it.
+    deps.publisher = {
+      publishReview: async () => {
+        throw new Error('GitHub API 422 while submitting review: Line could not be resolved')
+      },
+    }
+    const result = await runReviewPipeline(deps, params)
+
+    expect(result).toMatchObject({ published: false, reason: 'PUBLISH_FAILED' })
+    expect(result.details?.[0]).toContain('Line could not be resolved')
+  })
+
   it('re-validates the staged review against the changed-file set', async () => {
     const paths = tmpPaths()
     const spawn = fakeSpawn(true)

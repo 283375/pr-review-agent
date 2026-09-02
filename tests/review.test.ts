@@ -205,6 +205,14 @@ describe('createReviewPublisher', () => {
     expect(sent.comments[0]).toMatchObject({ path: 'src/app.ts', line: 12, side: 'RIGHT' })
   })
 
+  it('anchors the review to commit_id when one is provided', async () => {
+    const { impl, calls } = fetchCapture()
+    const publisher = createReviewPublisher({ token: 't', fetchImpl: impl })
+    await publisher.publishReview({ owner: 'acme', repo: 'repo', prNumber: 7, review: baseReview(), commitId: 'abc123' })
+    const sent = JSON.parse(String(calls[0]?.init?.body))
+    expect(sent.commit_id).toBe('abc123')
+  })
+
   it('throws on API failure with the response detail', async () => {
     const calls: Array<{ url: string; init?: RequestInit }> = []
     const impl = (async (url: string | URL, init?: RequestInit) => {
