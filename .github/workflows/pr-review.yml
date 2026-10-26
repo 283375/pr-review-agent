@@ -48,7 +48,9 @@ on:
         type: string
         default: '15'
     secrets:
-      github_token:
+      # Secret ids must not start with GITHUB_ (case-insensitive) — the
+      # reserved prefix would fail workflow validation at parse time.
+      token:
         description: 'Token for PR reads and publishing; defaults to github.token'
         required: false
       llm_api_key:
@@ -74,7 +76,7 @@ jobs:
         with:
           allowed-actors: ${{ inputs.allowed-actors }}
           command: ${{ inputs.command }}
-          github-token: ${{ secrets.github_token || github.token }}
+          github-token: ${{ secrets.token || github.token }}
 
   review:
     needs: gate
@@ -112,7 +114,7 @@ jobs:
         with:
           allowed-actors: ${{ inputs.allowed-actors }}
           command: ${{ inputs.command }}
-          github-token: ${{ secrets.github_token || github.token }}
+          github-token: ${{ secrets.token || github.token }}
           llm-provider: ${{ inputs.llm-provider }}
           llm-api-key: ${{ secrets.llm_api_key }}
           llm-base-url: ${{ inputs.llm-base-url }}
