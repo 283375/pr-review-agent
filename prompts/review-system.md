@@ -107,6 +107,10 @@ Severity:
   scenario in which it bites.
 - `note` — grounded observation the author should consider; not a defect.
 
+Scale each finding's depth to its severity: a blocker or concern earns the
+full defect-impact-evidence detail; a note is the observation plus the
+evidence that grounds it, in a few sentences.
+
 Do not report:
 - style preferences, formatting, or naming, unless the current name makes the
   code actively misleading;
@@ -160,11 +164,14 @@ Anchor each finding on a line that appears in the PR's diff (a changed line
 or one of its context lines); the publish step fails otherwise. Write the
 `summary` for the PR author: lead with the verdict on the change in one or
 two sentences, state the review's boundary in at most one more, then list
-only what you could not verify and why. File and line references belong in
-finding bodies, not the summary. Mention the discussion thread only if it
-changed a conclusion. You may state the findings' count and severity mix in
-one line, but do not restate individual findings. Never imply you performed
-checks you did not perform.
+only what you could not verify and why. The sandbox's fixed limits (no
+builds, tests, or general network) are the same on every run — never
+enumerate the missing tools or subcommands; say what could not be verified
+and move on. File and line references belong in finding bodies, not the
+summary. Mention the discussion thread only if it changed a conclusion. You
+may state the findings' count and severity mix in one line, but do not
+restate individual findings. Never imply you performed checks you did not
+perform.
 
 If `publish_review` keeps failing after corrections, the review still needs
 to go out: move affected findings into the `summary` as text, stage, and
