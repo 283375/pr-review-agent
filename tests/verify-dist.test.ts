@@ -1,15 +1,18 @@
 import { execFileSync } from 'node:child_process'
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, appendFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { afterAll, beforeEach, expect, test } from 'vitest'
+import { dirname, join } from 'node:path'
+import { afterEach, beforeEach, expect, test } from 'vitest'
+import { artifacts } from '../scripts/artifacts.mjs'
 
-// Scaffolds a miniature of the repo layout (both action files naming their
-// bundle, both bundles present and tracked) and asserts the behaviors the
-// verify gate exists for: tracked drift fails, an untracked output fails,
-// dirt outside the output directories passes, and a bundle rename that an
-// action file did not follow fails. CI only ever exercises the clean path.
+// Scaffolds a miniature of the repo layout from the manifest itself (each
+// bundle present and tracked, each action file naming its bundle) and
+// asserts the behaviors the verify gate exists for. CI only ever exercises
+// the clean path, so the failure branches are asserted here directly.
 const script = join(import.meta.dirname, '../scripts/verify-dist.mjs')
+
+const firstArtifact = artifacts[0]
+if (!firstArtifact) throw new Error('scripts/artifacts.mjs lists no artifacts')
 
 let root: string
 
@@ -17,54 +20,63 @@ function git(...args: string[]): void {
   execFileSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', ...args], { cwd: root })
 }
 
-function verify(): number {
+function verify(): { status: number; stderr: string } {
   try {
     execFileSync('node', [script], { cwd: root, stdio: 'pipe' })
-    return 0
+    return { status: 0, stderr: '' }
   } catch (err) {
-    return (err as { status: number }).status
+    const e = err as { status: number; stderr?: Buffer }
+    return { status: e.status, stderr: e.stderr?.toString() ?? '' }
   }
 }
 
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), 'verify-dist-'))
-  mkdirSync(join(root, 'dist'), { recursive: true })
-  mkdirSync(join(root, 'review/dist'), { recursive: true })
   mkdirSync(join(root, 'src'), { recursive: true })
-  writeFileSync(join(root, 'action.yml'), "runs:\n  main: 'dist/index.cjs'\n")
-  writeFileSync(join(root, 'review/action.yml'), 'run: node "$GITHUB_ACTION_PATH/dist/review.cjs"\n')
-  writeFileSync(join(root, 'dist/index.cjs'), 'gate bundle\n')
-  writeFileSync(join(root, 'review/dist/review.cjs'), 'review bundle\n')
   writeFileSync(join(root, 'src/index.ts'), 'export {}\n')
+  for (const a of artifacts) {
+    mkdirSync(join(root, dirname(a.outfile)), { recursive: true })
+    writeFileSync(join(root, a.outfile), `bundle for ${a.entry}\n`)
+    mkdirSync(join(root, dirname(a.action)), { recursive: true })
+    writeFileSync(join(root, a.action), `main: '${a.actionRef}'\n`)
+  }
   git('init')
   git('add', '.')
   git('commit', '-m', 'init')
 })
 
-afterAll(() => {
+afterEach(() => {
   rmSync(root, { recursive: true, force: true })
 })
 
 test('passes a clean tree', { timeout: 20_000 }, () => {
-  expect(verify()).toBe(0)
+  expect(verify()).toMatchObject({ status: 0 })
 })
 
 test('fails on tracked artifact drift', { timeout: 20_000 }, () => {
-  appendFileSync(join(root, 'dist/index.cjs'), 'stale byte\n')
-  expect(verify()).toBe(1)
+  appendFileSync(join(root, firstArtifact.outfile), 'stale byte\n')
+  expect(verify()).toMatchObject({ status: 1 })
 })
 
 test('fails on an untracked new artifact', { timeout: 20_000 }, () => {
-  writeFileSync(join(root, 'review/dist/review.cjs.map'), 'source map\n')
-  expect(verify()).toBe(1)
+  writeFileSync(join(root, firstArtifact.outfile + '.map'), 'source map\n')
+  expect(verify()).toMatchObject({ status: 1 })
+})
+
+test('fails on a tracked file the manifest does not list', { timeout: 20_000 }, () => {
+  const stalePath = firstArtifact.outfile + '.old'
+  writeFileSync(join(root, stalePath), 'left behind by a move\n')
+  git('add', stalePath)
+  git('commit', '-m', 'left behind')
+  expect(verify()).toMatchObject({ status: 1 })
 })
 
 test('ignores dirt outside the output directories', { timeout: 20_000 }, () => {
   appendFileSync(join(root, 'src/index.ts'), 'export const x = 1\n')
-  expect(verify()).toBe(0)
+  expect(verify()).toMatchObject({ status: 0 })
 })
 
 test('fails when an action file stops naming its bundle', { timeout: 20_000 }, () => {
-  writeFileSync(join(root, 'action.yml'), "runs:\n  main: 'dist/renamed.cjs'\n")
-  expect(verify()).toBe(1)
+  writeFileSync(join(root, firstArtifact.action), "main: 'moved.cjs'\n")
+  expect(verify()).toMatchObject({ status: 1 })
 })
