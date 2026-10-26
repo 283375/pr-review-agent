@@ -12,7 +12,7 @@
     "build": "esbuild src/main.ts --bundle --platform=node --format=cjs --target=node24 --outfile=dist/index.cjs && esbuild src/review/entry.ts --bundle --platform=node --format=cjs --target=node24 --outfile=review/dist/review.cjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "verify-dist": "pnpm build && git diff --exit-code -- dist"
+    "verify-dist": "pnpm build && node scripts/verify-dist.mjs"
   },
   "dependencies": {
     "@actions/core": "^1.11.1",
