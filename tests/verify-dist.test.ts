@@ -53,9 +53,12 @@ test('passes a clean tree', { timeout: 20_000 }, () => {
   expect(verify()).toMatchObject({ status: 0 })
 })
 
-test('fails on tracked artifact drift', { timeout: 20_000 }, () => {
-  appendFileSync(join(root, firstArtifact.outfile), 'stale byte\n')
-  expect(verify()).toMatchObject({ status: 1 })
+test('fails on drift in every manifest output', { timeout: 30_000 }, () => {
+  for (const a of artifacts) {
+    appendFileSync(join(root, a.outfile), 'stale byte\n')
+    expect(verify()).toMatchObject({ status: 1 })
+    git('checkout', '--', a.outfile)
+  }
 })
 
 test('fails on an untracked new artifact', { timeout: 20_000 }, () => {
@@ -79,4 +82,16 @@ test('ignores dirt outside the output directories', { timeout: 20_000 }, () => {
 test('fails when an action file stops naming its bundle', { timeout: 20_000 }, () => {
   writeFileSync(join(root, firstArtifact.action), "main: 'moved.cjs'\n")
   expect(verify()).toMatchObject({ status: 1 })
+})
+
+test('fails when the reference survives only outside the functional line', { timeout: 20_000 }, () => {
+  writeFileSync(join(root, firstArtifact.action), `# see ${firstArtifact.actionRef}\nmain: 'moved.cjs'\n`)
+  expect(verify()).toMatchObject({ status: 1 })
+})
+
+test('passes when the composite action loads the bundle through $GITHUB_ACTION_PATH', { timeout: 20_000 }, () => {
+  const review = artifacts[1]
+  if (!review) throw new Error('manifest lists no review bundle')
+  writeFileSync(join(root, review.action), `run: node "$GITHUB_ACTION_PATH/${review.actionRef}"\n`)
+  expect(verify()).toMatchObject({ status: 0 })
 })
