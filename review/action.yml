@@ -1,7 +1,6 @@
-# Composite (not `using: node24`): the pipeline spawns pi as a separate
-# process from node_modules — pi/gondolin cannot be bundled into a
-# self-contained JS file, so dependencies are installed declaratively here
-# (the pattern claude-code-action uses) instead of ad-hoc inside the JS entry.
+# Composite (not `using: node24`): pi and gondolin cannot be bundled into a
+# self-contained JS file — the pipeline spawns pi from node_modules — so the
+# dependencies are installed declaratively here.
 name: 'PR Review Agent (review)'
 description: >
   Runs the AI review pipeline for one /review trigger. The pi/gondolin
@@ -66,18 +65,34 @@ runs:
     - name: Install micro-VM runtime (QEMU)
       shell: bash
       # Gondolin runs its x86_64 micro-VMs through QEMU; qemu-img (in
-      # qemu-utils) handles the disk image. The README's qemu-system-arm
-      # row is for ARM hosts — the extension invokes qemu-system-x86_64.
-      # Composite steps have no timeout-minutes support (actions/runner#1979),
-      # so the cap is shell-level: a slow apt mirror must fail fast instead of
-      # eating the pi session's share of the job budget.
-      run: sudo timeout 600 bash -c 'apt-get update && apt-get install -y qemu-system-x86 qemu-utils'
+      # qemu-utils) handles the disk image. Composite steps have no
+      # timeout-minutes support (actions/runner#1979), so the cap is
+      # shell-level: a stalled mirror hangs with zero output (observed:
+      # 10+ minutes), which Acquire::*::Timeout bounds to ~30s per request.
+      # The loop retries once for transient failures.
+      run: |
+        for i in 1 2; do
+          if sudo timeout 300 apt-get -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o Acquire::Retries=2 update \
+            && sudo timeout 300 apt-get -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o Acquire::Retries=2 install -y qemu-system-x86 qemu-utils; then
+            exit 0
+          fi
+          echo "apt attempt $i failed; retrying" >&2
+          sleep 5
+        done
+        exit 1
     - name: Install action dependencies
       shell: bash
       # The action dir is review/ inside the fetched repo; the workspace root
       # (prompts/, gondolin/image.json, pnpm-workspace.yaml) is one level up.
-      # 10-minute shell cap, same rationale as the QEMU step above.
-      run: cd "$GITHUB_ACTION_PATH/.." && timeout 600 pnpm install --frozen-lockfile
+      # One retry under the same 5-minute cap as the QEMU step above.
+      run: |
+        cd "$GITHUB_ACTION_PATH/.."
+        for i in 1 2; do
+          if timeout 300 pnpm install --frozen-lockfile; then exit 0; fi
+          echo "pnpm install attempt $i failed; retrying" >&2
+          sleep 5
+        done
+        exit 1
     - id: review
       shell: bash
       run: node "$GITHUB_ACTION_PATH/dist/review.cjs"

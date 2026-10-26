@@ -73,18 +73,18 @@ jobs:
       review-wall: ${{ steps.wall.outputs.wall }}
     steps:
       - id: wall
-        # The review job's wall = session timeout + 10 min of bootstrap
+        # The review job's wall = session timeout + 15 min of bootstrap
         # headroom, so the review action's inner timeout always fires first
         # and the fallback publish keeps an exit. Shell arithmetic: Actions
-        # expressions have no arithmetic operators. A non-integer value fails
-        # the job here — loud misconfiguration beats a silently clipped
-        # session.
+        # expressions have no arithmetic operators. Non-integer values fail
+        # here — bash evaluates a bare word as 0 and would silently derive a
+        # nonsense wall.
         run: |
           t="${{ inputs.review-timeout-minutes }}"
           case "$t" in
             *[!0-9]*|'') echo "::error::review-timeout-minutes must be a positive integer (minutes), got '$t'"; exit 1 ;;
           esac
-          echo "wall=$((t + 10))" >> "$GITHUB_OUTPUT"
+          echo "wall=$((t + 15))" >> "$GITHUB_OUTPUT"
       - id: gate
         uses: 283375/pr-review-agent@main
         with:
@@ -96,11 +96,9 @@ jobs:
     needs: gate
     if: needs.gate.outputs.authorized == 'true'
     runs-on: ubuntu-latest
-    # Wall = session timeout + 10 (computed by the gate job): the review
-    # action's inner timeout always fires first, so an over-long session ends
-    # via the host-side fallback publish, while this wall only catches what
-    # the inner layers cannot see — without it, the runner default is 6 hours.
-    # Healthy runs finish in ~2-5 min and never reach it.
+    # Derived by the gate job (session timeout + 15, see above): an
+    # over-long session ends via the host-side fallback publish before this
+    # wall fires; without it, the runner default is 6 hours.
     timeout-minutes: ${{ fromJSON(needs.gate.outputs.review-wall) }}
     permissions:
       contents: read
@@ -119,7 +117,7 @@ jobs:
       # guest image spec, which lives in THIS repository — a caller workspace
       # has no gondolin/image.json to hash, and a key that never changes
       # would serve stale images forever. The pipeline builds the image per
-      # run (~1 min) instead; see docs/maintenance.md for the cache follow-up.
+      # run (~1 min) instead; see docs/maintenance.md.
       - id: review
         uses: 283375/pr-review-agent/review@main
         env:
