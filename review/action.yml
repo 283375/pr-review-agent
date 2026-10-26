@@ -11,6 +11,13 @@ inputs:
   github-token:
     description: 'Token for PR comments and API reads'
     required: true
+  allowed-actors:
+    description: 'Same policy as the gate: __OWNER__/__MEMBER__/__COLLABORATOR__/__CONTRIBUTOR__ or numeric user IDs. The pipeline re-checks the comment author (defense against wiring mistakes); __MEMBER__ needs a token with read:org plus can-see-private-members, otherwise it fails closed here.'
+    required: true
+  can-see-private-members:
+    description: 'Set true when github-token carries read:org, so the __MEMBER__ re-check can distinguish 404 from inability'
+    required: false
+    default: 'false'
   llm-provider:
     description: 'LLM provider: a gateway model id from models.json, or a native provider (e.g. deepseek)'
     required: false
@@ -74,6 +81,8 @@ runs:
         # @actions/core reads INPUT_<NAME> — composite actions do not inject
         # these automatically, so every input is mapped explicitly.
         INPUT_GITHUB-TOKEN: ${{ inputs.github-token }}
+        INPUT_ALLOWED-ACTORS: ${{ inputs.allowed-actors }}
+        INPUT_CAN-SEE-PRIVATE-MEMBERS: ${{ inputs.can-see-private-members }}
         INPUT_LLM-PROVIDER: ${{ inputs.llm-provider }}
         INPUT_LLM-API-KEY: ${{ inputs.llm-api-key }}
         INPUT_LLM-BASE-URL: ${{ inputs.llm-base-url }}

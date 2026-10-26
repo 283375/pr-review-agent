@@ -9,7 +9,10 @@ import {
   runReviewPipeline,
   type PipelinePaths,
 } from './pipeline'
-import { commandMatches } from '../inputs'
+import { parseAllowedActors, commandMatches } from '../inputs'
+import { authorize } from '../authorize'
+import { createMembershipApi } from '../github'
+import type { Decision, MembershipApi } from '../types'
 import { extractUserMessage } from './prompt'
 
 const actionLog = (message: string): void => core.info(message)
@@ -48,14 +51,20 @@ function ensureGuestImage(actionRoot: string, workDir: string, env: Record<strin
 interface CommentPayload {
   action?: string
   issue?: { number?: number; pull_request?: unknown }
-  comment?: { body?: string; user?: { login?: string; id?: number } }
-  repository?: { owner?: { login?: string }; name?: string }
+  comment?: {
+    body?: string
+    author_association?: string
+    user?: { login?: string; id?: number; type?: string }
+  }
+  repository?: { owner?: { login?: string; type?: string }; name?: string }
 }
 
 export async function run(overrides: {
   env?: Record<string, string | undefined>
   payload?: unknown
   inputs?: Record<string, string | undefined>
+  /** Test injection: membership API for the policy re-check. */
+  api?: MembershipApi
 } = {}): Promise<void> {
   const env = overrides.env ?? process.env
   const payload = overrides.payload ?? JSON.parse(readFileSync(env.GITHUB_EVENT_PATH ?? '', 'utf8'))
@@ -74,21 +83,56 @@ export async function run(overrides: {
     return
   }
 
-  const body = p.comment.body ?? ''
-  const command = overrides.inputs?.command ?? '/review'
-  if (!commandMatches(body, command)) {
-    core.setOutput('review-published', 'false')
-    core.setOutput('reason', 'COMMAND_MISMATCH')
-    return
-  }
-
   const inputs = {
+    allowedActors: overrides.inputs?.['allowed-actors'] ?? core.getInput('allowed-actors'),
+    canSeePrivateMembers: (overrides.inputs?.['can-see-private-members'] ?? (core.getInput('can-see-private-members') || 'false')) === 'true',
     llmProvider: overrides.inputs?.['llm-provider'] ?? core.getInput('llm-provider'),
     llmApiKey: overrides.inputs?.['llm-api-key'] ?? core.getInput('llm-api-key'),
     llmBaseUrl: overrides.inputs?.['llm-base-url'] ?? core.getInput('llm-base-url'),
     llmModel: overrides.inputs?.['llm-model'] ?? core.getInput('llm-model'),
     githubToken: overrides.inputs?.['github-token'] ?? core.getInput('github-token'),
     timeoutMinutes: Number(overrides.inputs?.['review-timeout-minutes'] ?? (core.getInput('review-timeout-minutes') || '15')),
+  }
+
+  // Self-verification: the pipeline re-checks the comment author against the
+  // same policy instead of trusting consumer wiring. Runs before anything
+  // expensive; denial is a graceful skip (exit 0), not a red job.
+  const user = p.comment.user
+  if ((user.type ?? 'User') === 'Bot') {
+    core.setOutput('review-published', 'false')
+    core.setOutput('reason', 'ACTOR_IS_BOT')
+    core.info('Comment author is a bot; nothing to do.')
+    return
+  }
+  const decision: Decision = await authorize({
+    actor: { login: user.login ?? '', id: user.id ?? 0 },
+    association: p.comment.author_association ?? 'NONE',
+    repositoryOwner: {
+      login: repository.owner,
+      type: p.repository?.owner?.type === 'Organization' ? 'Organization' : 'User',
+    },
+    policy: parseAllowedActors(inputs.allowedActors),
+    api: overrides.api ?? createMembershipApi({
+      token: inputs.githubToken,
+      baseUrl: env.GITHUB_API_URL,
+      canSeePrivateMembers: inputs.canSeePrivateMembers,
+    }),
+  })
+  if (decision.kind !== 'authorized') {
+    core.setOutput('review-published', 'false')
+    core.setOutput('reason', decision.code)
+    core.info(
+      `Review request not authorized (${decision.code}${'detail' in decision && decision.detail ? `: ${decision.detail}` : ''}).`,
+    )
+    return
+  }
+
+  const body = p.comment.body ?? ''
+  const command = overrides.inputs?.command ?? '/review'
+  if (!commandMatches(body, command)) {
+    core.setOutput('review-published', 'false')
+    core.setOutput('reason', 'COMMAND_MISMATCH')
+    return
   }
 
   const llm = resolveLlmConfig(

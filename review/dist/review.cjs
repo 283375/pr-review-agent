@@ -27406,6 +27406,29 @@ async function collectPrMetadata(get, repository, prNumber) {
 // src/inputs.ts
 var PLACEHOLDERS = ["__OWNER__", "__MEMBER__", "__COLLABORATOR__", "__CONTRIBUTOR__"];
 var PLACEHOLDER_SET = new Set(PLACEHOLDERS);
+var InputError = class extends Error {
+};
+function parseAllowedActors(raw) {
+  const tokens = raw.split(/[\s,;]+/).map((t) => t.trim()).filter(Boolean);
+  if (tokens.length === 0) {
+    throw new InputError(
+      "allowed-actors is empty \u2014 the review agent would never run. Provide placeholders (e.g. __OWNER__) and/or numeric GitHub user IDs."
+    );
+  }
+  return tokens.map(parseToken);
+}
+function parseToken(token) {
+  const upper = token.toUpperCase();
+  if (PLACEHOLDER_SET.has(upper)) {
+    return { kind: "placeholder", name: upper };
+  }
+  if (/^\d+$/.test(token)) {
+    return { kind: "user-id", id: Number(token) };
+  }
+  throw new InputError(
+    `Invalid allowed-actors token "${token}". Use a reserved placeholder (${PLACEHOLDERS.join(", ")}) or a numeric GitHub user ID. Logins are deliberately not accepted: users can rename themselves, IDs are canonical.`
+  );
+}
 function commandMatches(body, command) {
   const normalized = body.trim();
   const cmd = command.trim();
@@ -27808,6 +27831,104 @@ async function runReviewPipeline(deps, params) {
   }
 }
 
+// src/authorize.ts
+async function authorize(params) {
+  const { actor, association, repositoryOwner, policy, api } = params;
+  let memberCheckUnverified;
+  for (const token of policy) {
+    if (token.kind === "user-id") {
+      if (token.id === actor.id) {
+        return { kind: "authorized", rule: `user-id:${token.id}`, actor };
+      }
+      continue;
+    }
+    switch (token.name) {
+      case "__OWNER__":
+        if (association === "OWNER") {
+          return { kind: "authorized", rule: "__OWNER__", actor };
+        }
+        break;
+      case "__COLLABORATOR__":
+        if (association === "COLLABORATOR") {
+          return { kind: "authorized", rule: "__COLLABORATOR__", actor };
+        }
+        break;
+      case "__CONTRIBUTOR__":
+        if (association === "CONTRIBUTOR") {
+          return { kind: "authorized", rule: "__CONTRIBUTOR__", actor };
+        }
+        break;
+      case "__MEMBER__": {
+        if (repositoryOwner.type !== "Organization") {
+          memberCheckUnverified ??= "repository owner is not an Organization; __MEMBER__ cannot match";
+          break;
+        }
+        const check = await api.isOrgMember(repositoryOwner.login, actor.login);
+        if (check.outcome === "member") {
+          return { kind: "authorized", rule: "__MEMBER__", actor };
+        }
+        if (check.outcome === "unverified") {
+          memberCheckUnverified ??= check.detail ?? "org membership check failed";
+        }
+        break;
+      }
+    }
+  }
+  if (memberCheckUnverified !== void 0) {
+    return {
+      kind: "denied",
+      code: "MEMBER_UNVERIFIED",
+      actor,
+      detail: memberCheckUnverified
+    };
+  }
+  return { kind: "denied", code: "NOT_AUTHORIZED", actor };
+}
+
+// src/github.ts
+function createMembershipApi(options) {
+  const baseUrl = (options.baseUrl ?? process.env.GITHUB_API_URL ?? "https://api.github.com").replace(/\/+$/, "");
+  const fetchImpl = options.fetchImpl ?? fetch;
+  const timeoutMs = options.timeoutMs ?? 1e4;
+  return {
+    async isOrgMember(org, username) {
+      const url = `${baseUrl}/orgs/${encodeURIComponent(org)}/members/${encodeURIComponent(username)}`;
+      const headers = {
+        Accept: "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "User-Agent": "pr-review-agent"
+      };
+      if (options.token) headers.Authorization = `Bearer ${options.token}`;
+      try {
+        const res = await fetchImpl(url, {
+          method: "GET",
+          headers,
+          signal: AbortSignal.timeout(timeoutMs)
+        });
+        if (res.status === 204) return { outcome: "member" };
+        if (res.status === 404) {
+          if (options.canSeePrivateMembers) {
+            return { outcome: "not-member" };
+          }
+          return {
+            outcome: "unverified",
+            detail: "GET /orgs/.../members returned 404 \u2014 the user may be a private org member invisible to this token (GITHUB_TOKEN lacks read:org). Pass a PAT/App token with read:org to disambiguate, or rely on another allowed-actors token."
+          };
+        }
+        if (res.status === 401 || res.status === 403) {
+          return {
+            outcome: "unverified",
+            detail: `GitHub API returned ${res.status} for the membership check \u2014 token invalid or missing scope.`
+          };
+        }
+        return { outcome: "unverified", detail: `GitHub API returned unexpected HTTP ${res.status}.` };
+      } catch (err) {
+        return { outcome: "unverified", detail: `Membership check request failed: ${String(err)}` };
+      }
+    }
+  };
+}
+
 // src/review/main.ts
 var actionLog = (message) => core.info(message);
 function ensureGuestImage(actionRoot, workDir, env) {
@@ -27848,14 +27969,9 @@ async function run(overrides = {}) {
     core.info("Not a PR comment event; nothing to do.");
     return;
   }
-  const body = p.comment.body ?? "";
-  const command = overrides.inputs?.command ?? "/review";
-  if (!commandMatches(body, command)) {
-    core.setOutput("review-published", "false");
-    core.setOutput("reason", "COMMAND_MISMATCH");
-    return;
-  }
   const inputs = {
+    allowedActors: overrides.inputs?.["allowed-actors"] ?? core.getInput("allowed-actors"),
+    canSeePrivateMembers: (overrides.inputs?.["can-see-private-members"] ?? (core.getInput("can-see-private-members") || "false")) === "true",
     llmProvider: overrides.inputs?.["llm-provider"] ?? core.getInput("llm-provider"),
     llmApiKey: overrides.inputs?.["llm-api-key"] ?? core.getInput("llm-api-key"),
     llmBaseUrl: overrides.inputs?.["llm-base-url"] ?? core.getInput("llm-base-url"),
@@ -27863,6 +27979,42 @@ async function run(overrides = {}) {
     githubToken: overrides.inputs?.["github-token"] ?? core.getInput("github-token"),
     timeoutMinutes: Number(overrides.inputs?.["review-timeout-minutes"] ?? (core.getInput("review-timeout-minutes") || "15"))
   };
+  const user = p.comment.user;
+  if ((user.type ?? "User") === "Bot") {
+    core.setOutput("review-published", "false");
+    core.setOutput("reason", "ACTOR_IS_BOT");
+    core.info("Comment author is a bot; nothing to do.");
+    return;
+  }
+  const decision = await authorize({
+    actor: { login: user.login ?? "", id: user.id ?? 0 },
+    association: p.comment.author_association ?? "NONE",
+    repositoryOwner: {
+      login: repository.owner,
+      type: p.repository?.owner?.type === "Organization" ? "Organization" : "User"
+    },
+    policy: parseAllowedActors(inputs.allowedActors),
+    api: overrides.api ?? createMembershipApi({
+      token: inputs.githubToken,
+      baseUrl: env.GITHUB_API_URL,
+      canSeePrivateMembers: inputs.canSeePrivateMembers
+    })
+  });
+  if (decision.kind !== "authorized") {
+    core.setOutput("review-published", "false");
+    core.setOutput("reason", decision.code);
+    core.info(
+      `Review request not authorized (${decision.code}${"detail" in decision && decision.detail ? `: ${decision.detail}` : ""}).`
+    );
+    return;
+  }
+  const body = p.comment.body ?? "";
+  const command = overrides.inputs?.command ?? "/review";
+  if (!commandMatches(body, command)) {
+    core.setOutput("review-published", "false");
+    core.setOutput("reason", "COMMAND_MISMATCH");
+    return;
+  }
   const llm = resolveLlmConfig(
     {
       llmProvider: inputs.llmProvider,
