@@ -8,3 +8,9 @@ export const artifacts = [
   { entry: 'src/main.ts', outfile: 'dist/index.cjs', action: 'action.yml', actionRef: 'dist/index.cjs' },
   { entry: 'src/review/entry.ts', outfile: 'review/dist/review.cjs', action: 'review/action.yml', actionRef: 'dist/review.cjs' },
 ]
+
+// Coverage roots the verify gate checks in full, independent of where the
+// current outfiles live: every tracked file under a root must be a manifest
+// outfile, so a bundle that moves without git rm-ing the old path fails the
+// gate instead of hiding outside it.
+export const gateRoots = ['dist', 'review/dist']
