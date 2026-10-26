@@ -132,4 +132,18 @@ describe('review run() self-verification', () => {
       }),
     ).rejects.toThrow(/allowed-actors is empty/)
   })
+
+  it('fails loudly on a non-numeric session timeout after the gates pass', async () => {
+    await run({
+      env: BASE_ENV,
+      payload: payload(),
+      inputs: { 'allowed-actors': '__OWNER__', 'github-token': 't', 'review-timeout-minutes': 'soon' },
+      api: NOT_MEMBER_API,
+    })
+
+    expect(coreMocks.setFailed).toHaveBeenCalledWith(
+      expect.stringContaining('review-timeout-minutes must be a positive number'),
+    )
+    expect(outputs().get('reason')).toBeUndefined()
+  })
 })

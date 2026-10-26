@@ -70,7 +70,21 @@ jobs:
     outputs:
       authorized: ${{ steps.gate.outputs.authorized }}
       pr-number: ${{ steps.gate.outputs.pr-number }}
+      review-wall: ${{ steps.wall.outputs.wall }}
     steps:
+      - id: wall
+        # The review job's wall = session timeout + 10 min of bootstrap
+        # headroom, so the review action's inner timeout always fires first
+        # and the fallback publish keeps an exit. Shell arithmetic: Actions
+        # expressions have no arithmetic operators. A non-integer value fails
+        # the job here — loud misconfiguration beats a silently clipped
+        # session.
+        run: |
+          t="${{ inputs.review-timeout-minutes }}"
+          case "$t" in
+            *[!0-9]*|'') echo "::error::review-timeout-minutes must be a positive integer (minutes), got '$t'"; exit 1 ;;
+          esac
+          echo "wall=$((t + 10))" >> "$GITHUB_OUTPUT"
       - id: gate
         uses: 283375/pr-review-agent@main
         with:
@@ -82,13 +96,12 @@ jobs:
     needs: gate
     if: needs.gate.outputs.authorized == 'true'
     runs-on: ubuntu-latest
-    # 25 min = pi session timeout (review-timeout-minutes, default 15) +
-    # healthy bootstrap (~5 min) + upload, with headroom. Bootstrap steps are
-    # individually capped at 10 min inside the review action (shell-level:
-    # composite steps have no timeout-minutes support); this job wall is the
-    # last resort for anything that slips through — a healthy run finishes in
-    # ~2-5 min and never reaches it.
-    timeout-minutes: 25
+    # Wall = session timeout + 10 (computed by the gate job): the review
+    # action's inner timeout always fires first, so an over-long session ends
+    # via the host-side fallback publish, while this wall only catches what
+    # the inner layers cannot see — without it, the runner default is 6 hours.
+    # Healthy runs finish in ~2-5 min and never reach it.
+    timeout-minutes: ${{ fromJSON(needs.gate.outputs.review-wall) }}
     permissions:
       contents: read
       pull-requests: write

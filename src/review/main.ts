@@ -83,6 +83,7 @@ export async function run(overrides: {
     return
   }
 
+  const timeoutRaw = overrides.inputs?.['review-timeout-minutes'] ?? (core.getInput('review-timeout-minutes') || '15')
   const inputs = {
     allowedActors: overrides.inputs?.['allowed-actors'] ?? core.getInput('allowed-actors'),
     canSeePrivateMembers: (overrides.inputs?.['can-see-private-members'] ?? (core.getInput('can-see-private-members') || 'false')) === 'true',
@@ -91,7 +92,7 @@ export async function run(overrides: {
     llmBaseUrl: overrides.inputs?.['llm-base-url'] ?? core.getInput('llm-base-url'),
     llmModel: overrides.inputs?.['llm-model'] ?? core.getInput('llm-model'),
     githubToken: overrides.inputs?.['github-token'] ?? core.getInput('github-token'),
-    timeoutMinutes: Number(overrides.inputs?.['review-timeout-minutes'] ?? (core.getInput('review-timeout-minutes') || '15')),
+    timeoutMinutes: Number(timeoutRaw),
   }
 
   // Self-verification: the pipeline re-checks the comment author against the
@@ -132,6 +133,17 @@ export async function run(overrides: {
   if (!commandMatches(body, command)) {
     core.setOutput('review-published', 'false')
     core.setOutput('reason', 'COMMAND_MISMATCH')
+    return
+  }
+
+  // Operator misconfiguration fails loudly here, not at session spawn:
+  // setTimeout coerces NaN to 0, so an unvalidated garbage value would
+  // SIGKILL the session the instant it starts. Checked after the
+  // authorization and command gates so denials keep their graceful skip.
+  if (!Number.isFinite(inputs.timeoutMinutes) || inputs.timeoutMinutes <= 0) {
+    core.setFailed(
+      `Configuration error: review-timeout-minutes must be a positive number of minutes, got ${JSON.stringify(timeoutRaw)}`,
+    )
     return
   }
 

@@ -27969,6 +27969,7 @@ async function run(overrides = {}) {
     core.info("Not a PR comment event; nothing to do.");
     return;
   }
+  const timeoutRaw = overrides.inputs?.["review-timeout-minutes"] ?? (core.getInput("review-timeout-minutes") || "15");
   const inputs = {
     allowedActors: overrides.inputs?.["allowed-actors"] ?? core.getInput("allowed-actors"),
     canSeePrivateMembers: (overrides.inputs?.["can-see-private-members"] ?? (core.getInput("can-see-private-members") || "false")) === "true",
@@ -27977,7 +27978,7 @@ async function run(overrides = {}) {
     llmBaseUrl: overrides.inputs?.["llm-base-url"] ?? core.getInput("llm-base-url"),
     llmModel: overrides.inputs?.["llm-model"] ?? core.getInput("llm-model"),
     githubToken: overrides.inputs?.["github-token"] ?? core.getInput("github-token"),
-    timeoutMinutes: Number(overrides.inputs?.["review-timeout-minutes"] ?? (core.getInput("review-timeout-minutes") || "15"))
+    timeoutMinutes: Number(timeoutRaw)
   };
   const user = p.comment.user;
   if ((user.type ?? "User") === "Bot") {
@@ -28013,6 +28014,12 @@ async function run(overrides = {}) {
   if (!commandMatches(body, command)) {
     core.setOutput("review-published", "false");
     core.setOutput("reason", "COMMAND_MISMATCH");
+    return;
+  }
+  if (!Number.isFinite(inputs.timeoutMinutes) || inputs.timeoutMinutes <= 0) {
+    core.setFailed(
+      `Configuration error: review-timeout-minutes must be a positive number of minutes, got ${JSON.stringify(timeoutRaw)}`
+    );
     return;
   }
   const llm = resolveLlmConfig(
