@@ -1,14 +1,39 @@
 import { execFileSync } from 'node:child_process'
+import { existsSync, readFileSync } from 'node:fs'
+import { dirname, resolve } from 'node:path'
+import { artifacts } from './artifacts.mjs'
+
+// Run from the package root (the way npm/pnpm scripts execute): every path
+// is resolved against the working directory.
+const root = process.cwd()
 
 // git diff cannot see untracked outputs, so a newly appearing artifact
 // (extra entry bundle, sourcemap) would pass a diff-only gate; porcelain
 // status covers tracked drift and untracked files in one call.
-const out = execFileSync(
+const dirs = [...new Set(artifacts.map((a) => dirname(a.outfile)))]
+const status = execFileSync(
   'git',
-  ['status', '--porcelain', '--untracked-files=all', '--', 'dist', 'review/dist'],
-  { encoding: 'utf8' },
+  ['status', '--porcelain', '--untracked-files=all', '--', ...dirs],
+  { encoding: 'utf8', cwd: root },
 )
-if (out.trim() !== '') {
-  console.error('dist/ or review/dist/ is not up to date:\n' + out)
+if (status.trim() !== '') {
+  console.error('dist outputs are not up to date:\n' + status)
   process.exit(1)
+}
+
+for (const a of artifacts) {
+  if (!existsSync(resolve(root, a.outfile))) {
+    console.error(`missing build output: ${a.outfile}`)
+    process.exit(1)
+  }
+  if (!a.action) continue
+  const text = readFileSync(resolve(root, a.action), 'utf8')
+  if (!text.includes(a.actionRef)) {
+    console.error(`${a.action} no longer names '${a.actionRef}' — update scripts/artifacts.mjs when a bundle moves`)
+    process.exit(1)
+  }
+  if (resolve(root, dirname(a.action), a.actionRef) !== resolve(root, a.outfile)) {
+    console.error(`'${a.actionRef}' in ${a.action} does not resolve to ${a.outfile}`)
+    process.exit(1)
+  }
 }
