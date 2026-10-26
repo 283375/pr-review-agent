@@ -1,18 +1,63 @@
-# Self-test wiring: this action runs on its own repository so the trigger →
-# gate → review path can be exercised with real events.
+# Reusable entrypoint: the complete trigger → gate → review wiring. Consumers
+# call it from their own `issue_comment` workflow with a single `uses:`
+# (see the README Quickstart); this repository's self-test is the reference
+# caller (.github/workflows/self-test.yml).
+#
+# Job shape: the gate job runs the authorization action alone (contents:read,
+# no checkout, never sees PR content); the review job — the only holder of
+# the write token — starts only when the gate authorizes. New steps belong
+# inside the review job: the job-level `if:` covers them, no per-step guards.
+# The review action ALSO re-verifies the comment author in code (defense
+# against wiring mistakes), so this `if:` is a cost guard, not the security
+# boundary (see docs/security.md).
 #
 # Security notes:
-# - The gate job checks out the DEFAULT branch before `uses: ./` (local
-#   actions require a checkout) — never the PR head.
-# - The review job pins `uses: owner/repo@main`: the pipeline code always
-#   comes from the default branch, never from the checked-out PR head.
-#   The PR head checkout exists only as the read-only workspace the agent
-#   reviews.
-name: PR Review (self-test)
+# - Pipeline code always comes from the default branch (uses @main below);
+#   the PR-head checkout exists only as the reviewed workspace.
+# - A called workflow cannot elevate the GITHUB_TOKEN: the caller must grant
+#   `pull-requests: write` for publishing to work.
+name: PR Review
 
 on:
-  issue_comment:
-    types: [created]
+  workflow_call:
+    inputs:
+      allowed-actors:
+        description: 'Who may trigger a review: __OWNER__ / __MEMBER__ / __COLLABORATOR__ / __CONTRIBUTOR__ or numeric GitHub user IDs. Never logins (renamable).'
+        required: true
+        type: string
+      command:
+        description: 'Trigger command matched at the start of the comment body'
+        required: false
+        type: string
+        default: '/review'
+      llm-provider:
+        description: 'gateway (default, any OpenAI-compatible endpoint) or a native pi provider (e.g. deepseek)'
+        required: false
+        type: string
+      llm-base-url:
+        description: 'LLM endpoint (gateway mode only)'
+        required: false
+        type: string
+      llm-model:
+        description: 'Model ID'
+        required: false
+        type: string
+      review-timeout-minutes:
+        description: 'Hard timeout for the pi session'
+        required: false
+        type: string
+        default: '15'
+    secrets:
+      github_token:
+        description: 'Token for PR reads and publishing; defaults to github.token'
+        required: false
+      llm_api_key:
+        description: 'LLM API key'
+        required: true
+    outputs:
+      review-url:
+        description: 'URL of the published review; unset when nothing was published'
+        value: ${{ jobs.review.outputs.review-url }}
 
 permissions:
   contents: read
@@ -24,31 +69,26 @@ jobs:
       authorized: ${{ steps.gate.outputs.authorized }}
       pr-number: ${{ steps.gate.outputs.pr-number }}
     steps:
-      # Local action (`uses: ./`) needs the repo present; the default branch
-      # is the safe ref for issue_comment triggers.
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: refs/heads/main
-
       - id: gate
-        uses: ./
+        uses: 283375/pr-review-agent@main
         with:
-          allowed-actors: '__OWNER__'
-          command: '/review'
-          # __MEMBER__ is not used here yet; when it is, org repos need a
-          # token with read:org plus `can-see-private-members: true`.
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          allowed-actors: ${{ inputs.allowed-actors }}
+          command: ${{ inputs.command }}
+          github-token: ${{ secrets.github_token || github.token }}
 
   review:
     needs: gate
     if: needs.gate.outputs.authorized == 'true'
     runs-on: ubuntu-latest
-    # 25 min: guest image build (~1 min on cache miss) + pi session timeout
-    # (review-timeout-minutes) + artifact upload, with headroom.
+    # 25 min: dependency bootstrap + QEMU install + guest image build (~1 min)
+    # + pi session timeout (review-timeout-minutes) + artifact upload, with
+    # headroom.
     timeout-minutes: 25
     permissions:
       contents: read
       pull-requests: write
+    outputs:
+      review-url: ${{ steps.review.outputs.review-url }}
     steps:
       # The reviewed workspace: PR head with full history (git log in the
       # sandbox). NOTE: this deliberately does NOT feed `uses:` below.
@@ -57,24 +97,27 @@ jobs:
           fetch-depth: 0
           ref: refs/pull/${{ needs.gate.outputs.pr-number }}/head
 
-      # Same cache the guest-image workflow populates; the review job reuses
-      # the prebuilt image instead of rebuilding per run.
-      - id: guest-cache
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: .guest-assets
-          key: guest-image-${{ hashFiles('gondolin/image.json') }}-${{ hashFiles('pnpm-lock.yaml') }}
-
+      # No guest-image cache step on purpose: the cache key must track the
+      # guest image spec, which lives in THIS repository — a caller workspace
+      # has no gondolin/image.json to hash, and a key that never changes
+      # would serve stale images forever. The pipeline builds the image per
+      # run (~1 min) instead; see docs/maintenance.md for the cache follow-up.
       - id: review
         uses: 283375/pr-review-agent/review@main
         env:
-          # Cache-restored location; the action builds into it on cache miss.
-          GONDOLIN_GUEST_DIR: ${{ github.workspace }}/.guest-assets
+          # Outside the artifact upload root: the pipeline's default guest
+          # dir lives under RUNNER_TEMP/pr-review-artifacts, which this job
+          # uploads as review artifacts.
+          GONDOLIN_GUEST_DIR: ${{ runner.temp }}/pr-review-guest
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          llm-provider: deepseek
-          llm-api-key: ${{ secrets.SV_PR_REVIEW_AGENT_API_KEY }}
-          llm-model: deepseek-v4-flash-vision-exp
+          allowed-actors: ${{ inputs.allowed-actors }}
+          command: ${{ inputs.command }}
+          github-token: ${{ secrets.github_token || github.token }}
+          llm-provider: ${{ inputs.llm-provider }}
+          llm-api-key: ${{ secrets.llm_api_key }}
+          llm-base-url: ${{ inputs.llm-base-url }}
+          llm-model: ${{ inputs.llm-model }}
+          review-timeout-minutes: ${{ inputs.review-timeout-minutes }}
 
       - name: Upload review artifacts
         # Fixed path (deterministic: RUNNER_TEMP/pr-review-artifacts), not the

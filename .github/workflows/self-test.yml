@@ -1,0 +1,27 @@
+# Self-test: this repository is its own consumer. The `/review`-comment path
+# exercises the reusable workflow end to end with real events. Keep this
+# caller minimal — wiring changes belong in the reusable workflow, where
+# every consumer gets them.
+name: PR Review (self-test)
+
+on:
+  issue_comment:
+    types: [created]
+
+# A caller must grant the write scope itself: a called workflow can narrow
+# but never elevate the token it receives.
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  review:
+    # Same-repo relative reference: resolves to this file's commit (the
+    # default branch, for issue_comment events).
+    uses: ./.github/workflows/pr-review.yml
+    with:
+      allowed-actors: '__OWNER__'
+      llm-provider: deepseek
+      llm-model: deepseek-v4-flash-vision-exp
+    secrets:
+      llm_api_key: ${{ secrets.SV_PR_REVIEW_AGENT_API_KEY }}
