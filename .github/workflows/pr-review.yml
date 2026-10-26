@@ -82,9 +82,12 @@ jobs:
     needs: gate
     if: needs.gate.outputs.authorized == 'true'
     runs-on: ubuntu-latest
-    # 25 min: dependency bootstrap + QEMU install + guest image build (~1 min)
-    # + pi session timeout (review-timeout-minutes) + artifact upload, with
-    # headroom.
+    # 25 min = pi session timeout (review-timeout-minutes, default 15) +
+    # healthy bootstrap (~5 min) + upload, with headroom. Bootstrap steps are
+    # individually capped at 10 min inside the review action (shell-level:
+    # composite steps have no timeout-minutes support); this job wall is the
+    # last resort for anything that slips through — a healthy run finishes in
+    # ~2-5 min and never reaches it.
     timeout-minutes: 25
     permissions:
       contents: read
