@@ -69,8 +69,13 @@ runs:
       # timeout-minutes support (actions/runner#1979), so the cap is
       # shell-level: a stalled mirror hangs with zero output (observed:
       # 10+ minutes), which Acquire::*::Timeout bounds to ~30s per request.
-      # The loop retries once for transient failures.
+      # The loop retries once for transient failures. The runner images
+      # source packages from azure.archive.ubuntu.com, whose CDN stalls
+      # under load (actions/runner-images#12949) — repoint at the canonical
+      # archive before any apt call.
       run: |
+        sudo grep -rl 'azure\.archive\.ubuntu\.com' /etc/apt/ \
+          | xargs -r sudo sed -i 's/azure\.archive\.ubuntu\.com/archive.ubuntu.com/g'
         for i in 1 2; do
           if sudo timeout 300 apt-get -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o Acquire::Retries=2 update \
             && sudo timeout 300 apt-get -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o Acquire::Retries=2 install -y qemu-system-x86 qemu-utils; then
