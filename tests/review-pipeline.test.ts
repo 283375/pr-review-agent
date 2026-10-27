@@ -288,6 +288,7 @@ describe('runReviewPipeline', () => {
     expect(args).toContain('--no-context-files')
     expect(args).toContain('--no-approve')
     expect(args).toContain('--exclude-tools edit,write,grep,find,ls,powershell')
+    expect(args).toContain('--no-mcp')
     // --no-extensions only disables discovery; the review extension must be
     // loaded explicitly or submit_review and the sandbox never exist.
     expect(args).toContain('-e /ext.ts')

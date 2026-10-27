@@ -340,6 +340,10 @@ export async function runReviewPipeline(
       // it, bash/read run unsandboxed on the runner host.
       '--no-extensions',
       '-e', deps.extensionPath,
+      // Every model-facing tool comes from the extension above or the
+      // exclusion list below; MCP stays off so an mcp.json in the config
+      // dir could never add one.
+      '--no-mcp',
       '--exclude-tools', 'edit,write,grep,find,ls,powershell',
       ...modelArgs,
       '--system-prompt', systemPrompt,
