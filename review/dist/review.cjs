@@ -27658,7 +27658,8 @@ function renderPiEvent(line) {
     case "tool_execution_end":
       return event.isError ? `\u2717 ${event.toolName}: ${preview(event.result)}` : void 0;
     case "message_end": {
-      const content = event.message?.content ?? [];
+      const raw = event.message?.content;
+      const content = Array.isArray(raw) ? raw : typeof raw === "string" && raw !== "" ? [{ type: "text", text: raw }] : [];
       const hasToolCall = content.some((c) => c.type === "toolCall");
       const text = content.find((c) => c.type === "text")?.text;
       if (!hasToolCall && text) return `\u{1F4AC} ${preview(text)}`;

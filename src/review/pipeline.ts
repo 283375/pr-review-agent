@@ -220,7 +220,7 @@ export function renderPiEvent(line: string): string | undefined {
     args?: unknown
     result?: unknown
     isError?: boolean
-    message?: { role?: string; content?: Array<{ type: string; text?: string }> }
+    message?: { role?: string; content?: Array<{ type: string; text?: string }> | string }
   }
   try {
     event = JSON.parse(line)
@@ -236,7 +236,14 @@ export function renderPiEvent(line: string): string | undefined {
     case 'tool_execution_end':
       return event.isError ? `✗ ${event.toolName}: ${preview(event.result)}` : undefined
     case 'message_end': {
-      const content = event.message?.content ?? []
+      // pi emits message.content as a block array on assistant messages and
+      // as a plain string on user/system messages.
+      const raw = event.message?.content
+      const content = Array.isArray(raw)
+        ? raw
+        : typeof raw === 'string' && raw !== ''
+          ? [{ type: 'text', text: raw }]
+          : []
       const hasToolCall = content.some((c) => c.type === 'toolCall')
       const text = content.find((c) => c.type === 'text')?.text
       if (!hasToolCall && text) return `💬 ${preview(text)}`

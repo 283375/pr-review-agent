@@ -427,6 +427,18 @@ describe('renderPiEvent', () => {
     expect(toolCall).toBeUndefined()
   })
 
+  it('handles pi 1.4.0 string content on user/system messages', () => {
+    const user = renderPiEvent(
+      JSON.stringify({ type: 'message_end', message: { role: 'user', content: 'Review this change', timestamp: 1 } }),
+    )
+    expect(user).toContain('💬 Review this change')
+
+    // The system message_end carries an empty string; nothing worth logging.
+    expect(
+      renderPiEvent(JSON.stringify({ type: 'message_end', message: { role: 'system', content: '' } })),
+    ).toBeUndefined()
+  })
+
   it('drops token-delta and lifecycle events; previews long text; passes non-JSON through', () => {
     expect(renderPiEvent(JSON.stringify({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: 'x' } }))).toBeUndefined()
     expect(renderPiEvent(JSON.stringify({ type: 'agent_end', messages: [] }))).toBeUndefined()
