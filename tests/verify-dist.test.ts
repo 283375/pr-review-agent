@@ -76,24 +76,42 @@ test('fails on a tracked file the manifest does not list', { timeout: 20_000 }, 
   expect(verify()).toMatchObject({ status: 1, stderr: expect.stringContaining('not manifest outputs') })
 })
 
+test('fails on a missing build output', { timeout: 20_000 }, () => {
+  rmSync(join(root, firstArtifact.outfile))
+  git('rm', '--cached', firstArtifact.outfile)
+  git('commit', '-m', 'drop bundle')
+  expect(verify()).toMatchObject({ status: 1, stderr: expect.stringContaining('missing build output') })
+})
+
 test('ignores dirt outside the output directories', { timeout: 20_000 }, () => {
   appendFileSync(join(root, 'src/index.ts'), 'export const x = 1\n')
   expect(verify()).toMatchObject({ status: 0 })
 })
 
-test('fails when an action file stops naming its bundle', { timeout: 20_000 }, () => {
-  writeFileSync(join(root, firstArtifact.action), "main: 'moved.cjs'\n")
-  expect(verify()).toMatchObject({ status: 1, stderr: expect.stringContaining('no functional reference') })
+test('fails when an action file stops naming its bundle', { timeout: 40_000 }, () => {
+  for (const a of artifacts) {
+    writeFileSync(join(root, a.action), "main: 'moved.cjs'\n")
+    const v = verify()
+    expect(v.status).toBe(1)
+    expect(v.stderr).toContain('no functional reference')
+  }
 })
 
-test('fails when the reference survives only in a comment', { timeout: 20_000 }, () => {
-  writeFileSync(join(root, firstArtifact.action), `# main: '${firstArtifact.actionRef}'\nmain: 'moved.cjs'\n`)
-  expect(verify()).toMatchObject({ status: 1, stderr: expect.stringContaining('no functional reference') })
+test('fails when the reference survives only in a comment', { timeout: 40_000 }, () => {
+  for (const a of artifacts) {
+    writeFileSync(
+      join(root, a.action),
+      `run: node "$GITHUB_ACTION_PATH/moved.cjs" # was ${a.actionRef}\n`,
+    )
+    const v = verify()
+    expect(v.status).toBe(1)
+    expect(v.stderr).toContain('no functional reference')
+  }
 })
 
-test('passes when the composite action loads the bundle through $GITHUB_ACTION_PATH', { timeout: 20_000 }, () => {
-  const review = artifacts[1]
-  if (!review) throw new Error('manifest lists no review bundle')
-  writeFileSync(join(root, review.action), `run: node "$GITHUB_ACTION_PATH/${review.actionRef}"\n`)
-  expect(verify()).toMatchObject({ status: 0 })
+test('passes when the composite action loads the bundle through $GITHUB_ACTION_PATH', { timeout: 40_000 }, () => {
+  for (const a of artifacts) {
+    writeFileSync(join(root, a.action), `run: node "$GITHUB_ACTION_PATH/${a.actionRef}"\n`)
+    expect(verify()).toMatchObject({ status: 0 })
+  }
 })

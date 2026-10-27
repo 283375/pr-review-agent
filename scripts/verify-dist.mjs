@@ -50,19 +50,37 @@ if (stale.length > 0) {
 }
 
 // Every bundle must be referenced by its action file's functional line — a
-// YAML `main:` value or a `$GITHUB_ACTION_PATH/` argument. Comment lines are
-// stripped and `main:` is anchored to line start, so a commented-out old
-// value cannot satisfy the check.
+// YAML `main:` value or a `$GITHUB_ACTION_PATH/` argument. Comments are
+// stripped before matching: whole-line `#` comments and, quote-aware, ` #`
+// trailing comments, so neither a commented-out old value nor a trailing
+// "was <old path>" note can satisfy the check.
+function stripComments(text) {
+  return text
+    .split('\n')
+    .map((line) => {
+      let quote
+      for (let i = 0; i < line.length; i++) {
+        const ch = line[i]
+        if (quote) {
+          if (ch === quote) quote = undefined
+        } else if (ch === "'" || ch === '"') {
+          quote = ch
+        } else if (ch === '#' && (i === 0 || /\s/.test(line[i - 1]))) {
+          return line.slice(0, i)
+        }
+      }
+      return line
+    })
+    .join('\n')
+}
+
 for (const a of artifacts) {
   if (!existsSync(resolve(root, a.outfile))) {
     console.error(`missing build output: ${a.outfile}`)
     process.exit(1)
   }
-  const functional = readFileSync(resolve(root, a.action), 'utf8')
-    .split('\n')
-    .filter((line) => !line.trimStart().startsWith('#'))
-    .join('\n')
-  const refs = [...functional.matchAll(/^\s*main:\s*['"]([^'"]+)['"]|\$GITHUB_ACTION_PATH\/([\w./-]+)/gm)].map((m) => m[1] ?? m[2])
+  const functional = stripComments(readFileSync(resolve(root, a.action), 'utf8'))
+  const refs = [...functional.matchAll(/^\s*main:\s*['"]?([^'"\s#]+)['"]?|\$GITHUB_ACTION_PATH\/([\w./-]+)/gm)].map((m) => m[1] ?? m[2])
   if (!refs.includes(a.actionRef)) {
     console.error(`${a.action} has no functional reference to '${a.actionRef}' — update scripts/artifacts.mjs when a bundle moves`)
     process.exit(1)
