@@ -50,16 +50,19 @@ if (stale.length > 0) {
 }
 
 // Every bundle must be referenced by its action file's functional line — a
-// YAML `main:` value or a `$GITHUB_ACTION_PATH/` argument — not merely
-// mentioned anywhere in the file; a leftover comment naming the old path
-// must not satisfy the check.
+// YAML `main:` value or a `$GITHUB_ACTION_PATH/` argument. Comment lines are
+// stripped and `main:` is anchored to line start, so a commented-out old
+// value cannot satisfy the check.
 for (const a of artifacts) {
   if (!existsSync(resolve(root, a.outfile))) {
     console.error(`missing build output: ${a.outfile}`)
     process.exit(1)
   }
-  const text = readFileSync(resolve(root, a.action), 'utf8')
-  const refs = [...text.matchAll(/main:\s*['"]([^'"]+)['"]|\$GITHUB_ACTION_PATH\/([\w./-]+)/g)].map((m) => m[1] ?? m[2])
+  const functional = readFileSync(resolve(root, a.action), 'utf8')
+    .split('\n')
+    .filter((line) => !line.trimStart().startsWith('#'))
+    .join('\n')
+  const refs = [...functional.matchAll(/^\s*main:\s*['"]([^'"]+)['"]|\$GITHUB_ACTION_PATH\/([\w./-]+)/gm)].map((m) => m[1] ?? m[2])
   if (!refs.includes(a.actionRef)) {
     console.error(`${a.action} has no functional reference to '${a.actionRef}' — update scripts/artifacts.mjs when a bundle moves`)
     process.exit(1)

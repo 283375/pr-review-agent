@@ -56,14 +56,16 @@ test('passes a clean tree', { timeout: 20_000 }, () => {
 test('fails on drift in every manifest output', { timeout: 30_000 }, () => {
   for (const a of artifacts) {
     appendFileSync(join(root, a.outfile), 'stale byte\n')
-    expect(verify()).toMatchObject({ status: 1 })
+    const v = verify()
+    expect(v.status).toBe(1)
+    expect(v.stderr).toContain('dist outputs are not up to date')
     git('checkout', '--', a.outfile)
   }
 })
 
 test('fails on an untracked new artifact', { timeout: 20_000 }, () => {
   writeFileSync(join(root, firstArtifact.outfile + '.map'), 'source map\n')
-  expect(verify()).toMatchObject({ status: 1 })
+  expect(verify()).toMatchObject({ status: 1, stderr: expect.stringContaining('not up to date') })
 })
 
 test('fails on a tracked file the manifest does not list', { timeout: 20_000 }, () => {
@@ -71,7 +73,7 @@ test('fails on a tracked file the manifest does not list', { timeout: 20_000 }, 
   writeFileSync(join(root, stalePath), 'left behind by a move\n')
   git('add', stalePath)
   git('commit', '-m', 'left behind')
-  expect(verify()).toMatchObject({ status: 1 })
+  expect(verify()).toMatchObject({ status: 1, stderr: expect.stringContaining('not manifest outputs') })
 })
 
 test('ignores dirt outside the output directories', { timeout: 20_000 }, () => {
@@ -81,12 +83,12 @@ test('ignores dirt outside the output directories', { timeout: 20_000 }, () => {
 
 test('fails when an action file stops naming its bundle', { timeout: 20_000 }, () => {
   writeFileSync(join(root, firstArtifact.action), "main: 'moved.cjs'\n")
-  expect(verify()).toMatchObject({ status: 1 })
+  expect(verify()).toMatchObject({ status: 1, stderr: expect.stringContaining('no functional reference') })
 })
 
-test('fails when the reference survives only outside the functional line', { timeout: 20_000 }, () => {
-  writeFileSync(join(root, firstArtifact.action), `# see ${firstArtifact.actionRef}\nmain: 'moved.cjs'\n`)
-  expect(verify()).toMatchObject({ status: 1 })
+test('fails when the reference survives only in a comment', { timeout: 20_000 }, () => {
+  writeFileSync(join(root, firstArtifact.action), `# main: '${firstArtifact.actionRef}'\nmain: 'moved.cjs'\n`)
+  expect(verify()).toMatchObject({ status: 1, stderr: expect.stringContaining('no functional reference') })
 })
 
 test('passes when the composite action loads the bundle through $GITHUB_ACTION_PATH', { timeout: 20_000 }, () => {
