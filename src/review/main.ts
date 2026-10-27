@@ -14,6 +14,7 @@ import { authorize } from '../authorize'
 import { createMembershipApi } from '../github'
 import type { Decision, MembershipApi } from '../types'
 import { extractUserMessage } from './prompt'
+import { reviewArtifact } from '../../scripts/artifacts.mjs'
 
 const actionLog = (message: string): void => core.info(message)
 
@@ -157,9 +158,11 @@ export async function run(overrides: {
     env,
   )
 
-  // The review bundle lives at review/dist/review.cjs — two levels below the
-  // repository root, where prompts/, pi/, gondolin/ and node_modules resolve.
-  const actionRoot = overrides.env === undefined ? path.resolve(__dirname, '../..') : env.PR_REVIEW_ACTION_ROOT ?? '.'
+  // actionRoot is the repository root that prompts/, pi/, gondolin/ and
+  // node_modules resolve against, owned by the manifest: it is the path from
+  // the review bundle's directory back to the root, so moving the bundle in
+  // scripts/artifacts.mjs moves the root with it.
+  const actionRoot = overrides.env === undefined ? path.resolve(__dirname, reviewArtifact.actionRoot ?? '.') : env.PR_REVIEW_ACTION_ROOT ?? '.'
   const workDir = path.join(env.RUNNER_TEMP ?? env.PR_REVIEW_WORKDIR ?? '.', 'pr-review-artifacts')
 
   // Dependency install happens declaratively in review/action.yml (composite

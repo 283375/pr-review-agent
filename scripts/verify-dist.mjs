@@ -89,4 +89,8 @@ for (const a of artifacts) {
     console.error(`'${a.actionRef}' in ${a.action} does not resolve to ${a.outfile}`)
     process.exit(1)
   }
+  if (a.actionRoot && resolve(root, dirname(a.outfile), a.actionRoot) !== root) {
+    console.error(`${a.outfile}: actionRoot '${a.actionRoot}' does not resolve to the repository root`)
+    process.exit(1)
+  }
 }

@@ -27929,6 +27929,20 @@ function createMembershipApi(options) {
   };
 }
 
+// scripts/artifacts.mjs
+var actionRootFor = (outfile) => "../".repeat(outfile.split("/").length - 1) || ".";
+var artifacts = [
+  { entry: "src/main.ts", outfile: "dist/index.cjs", action: "action.yml", actionRef: "dist/index.cjs" },
+  {
+    entry: "src/review/entry.ts",
+    outfile: "review/dist/review.cjs",
+    action: "review/action.yml",
+    actionRef: "dist/review.cjs",
+    actionRoot: actionRootFor("review/dist/review.cjs")
+  }
+];
+var reviewArtifact = artifacts[1];
+
 // src/review/main.ts
 var actionLog = (message) => core.info(message);
 function ensureGuestImage(actionRoot, workDir, env) {
@@ -28031,7 +28045,7 @@ async function run(overrides = {}) {
     },
     env
   );
-  const actionRoot = overrides.env === void 0 ? import_node_path2.default.resolve(__dirname, "../..") : env.PR_REVIEW_ACTION_ROOT ?? ".";
+  const actionRoot = overrides.env === void 0 ? import_node_path2.default.resolve(__dirname, reviewArtifact.actionRoot ?? ".") : env.PR_REVIEW_ACTION_ROOT ?? ".";
   const workDir = import_node_path2.default.join(env.RUNNER_TEMP ?? env.PR_REVIEW_WORKDIR ?? ".", "pr-review-artifacts");
   const pipelineEnv = {};
   for (const [k, v] of Object.entries(env)) {
